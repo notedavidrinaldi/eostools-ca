@@ -12,11 +12,56 @@ return [
         'chat_ids' => ['-1002149116231', '-1125589160', '-4166697858'],
         'poll_state_file' => __DIR__ . '/storage/state/telegram_offset.json',
         'webhook_key' => 'eos-tools-secure-key',
+        'bot_name' => 'EOS Tools',
+        'aliases' => ['eos', 'eos tools', 'eostools', 'bot eos'],
     ],
     'disk' => [
         'drive' => 'C:',
         'threshold_percent' => 5,
         'state_file' => __DIR__ . '/storage/state/disk_monitor.json',
+    ],
+    'network' => [
+        'timeout_seconds' => 2,
+        'state_file' => __DIR__ . '/storage/state/network_monitor.json',
+        'notify_on_change' => true,
+        'targets' => [
+            [
+                'key' => 'pulau_payung',
+                'label' => 'Server Pulau Payung',
+                'type' => 'ping',
+                'host' => '10.15.42.34',
+            ],
+            [
+                'key' => 'server_cloud',
+                'label' => 'Server Cloud',
+                'type' => 'ping',
+                'host' => '172.27.0.21',
+            ],
+            [
+                'key' => 'lb_server',
+                'label' => 'LB Server',
+                'type' => 'ping',
+                'host' => '172.27.0.26',
+            ],
+            [
+                'key' => 'cusmod_domain',
+                'label' => 'CUSMOD Domain',
+                'type' => 'http',
+                'url' => 'https://cusmod-ca.multiterminal.co.id/',
+            ],
+            [
+                'key' => 'ca_cam_3in',
+                'label' => 'CA Cam 3IN',
+                'type' => 'ping',
+                'host' => '10.116.224.48',
+            ],
+            [
+                'key' => 'ca_cam_3out',
+                'label' => 'CA Cam 3OUT',
+                'type' => 'ping',
+                'host' => '10.116.224.48',
+            ],
+        ],
     ],
     'controller' => [
         'state_file' => __DIR__ . '/storage/state/controller_state.json',
@@ -73,5 +118,6 @@ return [
         'logs' => __DIR__ . '/storage/logs',
         'app_log' => __DIR__ . '/storage/logs/activity.log',
         'telegram_log' => __DIR__ . '/storage/logs/telegram.log',
+        'network_log' => __DIR__ . '/storage/logs/network.log',
     ],
 ];

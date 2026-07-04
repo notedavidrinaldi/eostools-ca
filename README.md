@@ -8,6 +8,7 @@ Super app operasional untuk:
 - restart app pool IIS
 - restart IIS penuh
 - monitor disk `C:`
+- monitor jaringan IP/domain
 - command Telegram
 - pencarian image backup dari share folder
 
@@ -71,10 +72,17 @@ curl "http://localhost/eos-tools/telegram_poll.php?key=GANTI_KEY"
 
 - `/help`
 - `/disk`
+- `/network`
 - `/health`
 - `/restart AMS`
 - `/restart-group CGSIN_STACK`
 - `/iis`
+
+Bot juga bisa merespons lebih natural saat:
+
+- pesannya di-reply
+- namanya disebut
+- diajak chat singkat seperti sapaan atau permintaan bantuan
 
 ## Controller commands
 
@@ -93,6 +101,24 @@ Alur seperti mikrocontroller:
 1. `arm`
 2. `fire`
 3. otomatis `disarm` setelah eksekusi jika `auto_disarm_after_fire=true`
+
+## Network Monitoring
+
+Dashboard memantau target berikut:
+
+- `10.15.42.34` Server Pulau Payung
+- `172.27.0.21` Server Cloud
+- `172.27.0.26` LB Server
+- `https://cusmod-ca.multiterminal.co.id/`
+- `10.116.224.48` CA Cam 3IN
+- `10.116.224.48` CA Cam 3OUT
+
+Jika salah satu target berubah status:
+
+- `online -> offline`
+- `offline -> online`
+
+maka sistem akan kirim notifikasi perubahan ke Telegram dan mencatatnya di `network.log`.
 
 ## Catatan migrasi
 

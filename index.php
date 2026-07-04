@@ -3,6 +3,7 @@ require __DIR__ . '/bootstrap.php';
 
 if (isset($_GET['logout'])) {
     eos_log('Logout berhasil.');
+    eos_log_event('AUTH', 'logout', 'INFO', [], eos_current_user() ?: 'system');
     eos_logout();
     header('Location: index.php');
     exit;
@@ -13,6 +14,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'login
     $password = (string) ($_POST['password'] ?? '');
     if (eos_login($username, $password)) {
         eos_log('Login berhasil.', 'app', $username);
+        eos_log_event('AUTH', 'login', 'INFO', [], $username);
         header('Location: index.php');
         exit;
     }
@@ -30,7 +32,9 @@ if (isset($_GET['api'])) {
 
         case 'logs':
             $type = $_GET['type'] ?? 'app';
-            $file = $type === 'telegram' ? eos_config('paths.telegram_log') : eos_config('paths.app_log');
+            $file = $type === 'telegram'
+                ? eos_config('paths.telegram_log')
+                : ($type === 'network' ? eos_config('paths.network_log') : eos_config('paths.app_log'));
             eos_json(['ok' => true, 'logs' => eos_tail($file, 80)]);
             break;
 
@@ -67,6 +71,11 @@ if (isset($_GET['api'])) {
             eos_json(['ok' => true, 'data' => $report]);
             break;
 
+        case 'network':
+            $report = eos_network_monitor(isset($_GET['log']));
+            eos_json(['ok' => true, 'data' => $report]);
+            break;
+
         case 'find_images':
             if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
                 eos_json(['ok' => false, 'message' => 'Method tidak valid.'], 405);
@@ -79,6 +88,7 @@ if (isset($_GET['api'])) {
             eos_send_telegram(
                 "🔔 <b>Test EOS Tools</b>\nUser: <b>" . eos_format_plain((string) eos_current_user()) . "</b>\nTime: " . date('Y-m-d H:i:s')
             );
+            eos_log_event('TG', 'manual_test', 'INFO', [], (string) eos_current_user(), 'telegram');
             eos_json(['ok' => true, 'message' => 'Pesan test Telegram dikirim.']);
             break;
     }
@@ -316,7 +326,7 @@ $summary = eos_dashboard_summary();
         .content{position:relative;z-index:1;padding:24px}
         .status-grid{
             display:grid;
-            grid-template-columns:repeat(5, minmax(0,1fr));
+            grid-template-columns:repeat(6, minmax(0,1fr));
             gap:14px;
         }
         .module-card{
@@ -481,10 +491,41 @@ $summary = eos_dashboard_summary();
             background:#0b1c25;
         }
         .gallery-meta{padding:12px}
+        .network-grid{
+            display:grid;
+            grid-template-columns:repeat(2,minmax(0,1fr));
+            gap:12px;
+            margin-top:16px;
+        }
+        .network-card{
+            border:1px solid var(--line);
+            border-radius:18px;
+            background:#06131a;
+            padding:14px;
+        }
+        .network-card .top{
+            display:flex;
+            justify-content:space-between;
+            align-items:center;
+            gap:10px;
+        }
+        .network-card .name{font-weight:700;color:var(--white)}
+        .network-card .endpoint-text{margin-top:8px;font-size:12px;color:#8fb7c5;word-break:break-word}
+        .network-card .detail{margin-top:10px;font-size:12px;color:#bcdfea;line-height:1.5}
+        .network-card .state{
+            display:inline-flex;
+            align-items:center;
+            gap:8px;
+            padding:6px 10px;
+            border-radius:999px;
+            font-size:11px;
+            border:1px solid #173846;
+        }
+        .state-dot{width:9px;height:9px;border-radius:50%;box-shadow:0 0 12px currentColor}
         .log-grid{
             margin-top:16px;
             display:grid;
-            grid-template-columns:1fr 1fr .9fr;
+            grid-template-columns:1fr 1fr 1fr .9fr;
             gap:16px;
         }
         .log-box{
@@ -516,7 +557,7 @@ $summary = eos_dashboard_summary();
         @media (max-width: 760px){
             .shell{padding:12px}
             .topbar,.content{padding:16px}
-            .status-grid,.top-meta,.telemetry,.gallery,.button-grid,.quick-switches{grid-template-columns:1fr}
+            .status-grid,.top-meta,.telemetry,.gallery,.button-grid,.quick-switches,.network-grid{grid-template-columns:1fr}
             h1{font-size:30px}
         }
     </style>
@@ -556,6 +597,14 @@ $summary = eos_dashboard_summary();
                             <div class="k">Last Fire</div>
                             <div class="v" id="controllerLast"><?= eos_h((string) $summary['controller']['last_command']) ?></div>
                         </div>
+                        <div class="meta-card">
+                            <div class="k">Network Bus</div>
+                            <div class="v" id="networkState"><?= strtoupper(eos_h((string) ($summary['network']['overall'] ?? 'standby'))) ?></div>
+                        </div>
+                        <div class="meta-card">
+                            <div class="k">Network Scan</div>
+                            <div class="v" id="networkScanTime"><?= eos_h((string) ($summary['network']['updated_at'] ?? '-')) ?></div>
+                        </div>
                     </div>
                     <a class="logout" href="?logout=1">POWER OFF</a>
                 </div>
@@ -580,8 +629,9 @@ $summary = eos_dashboard_summary();
 
                 <div class="busbar">
                     <div class="bus-pill">BUS STATE: <strong id="busStateBar"><?= eos_h($summary['board']['bus_state']) ?></strong></div>
-                    <div class="bus-pill">MODULES: <?= eos_h((string) $summary['board']['module_count']) ?></div>
+                    <div class="bus-pill">MODULES: <span id="moduleCount"><?= eos_h((string) $summary['board']['module_count']) ?></span></div>
                     <div class="bus-pill">DRIVE SENSOR: <span id="diskHeadline"><?= eos_h(($summary['disk']['free_human'] ?? '-') . ' / ' . ($summary['disk']['free_percent'] ?? '-') . '%') ?></span></div>
+                    <div class="bus-pill">NET BUS: <span id="networkHeadline"><?= strtoupper(eos_h((string) ($summary['network']['overall'] ?? 'standby'))) ?></span></div>
                     <div class="bus-pill">SCAN LOOP: <?= eos_h($summary['board']['uptime_hint']) ?></div>
                 </div>
 
@@ -613,7 +663,7 @@ $summary = eos_dashboard_summary();
                             <button class="btn-main" onclick="runRestartPool()">RESTART POOL</button>
                             <button class="btn-soft" onclick="runRestartGroup()">RESTART GROUP</button>
                             <button class="btn-danger" onclick="runRestartIis()">HARD RESET IIS</button>
-                            <button class="btn-warn" onclick="sendTestTelegram()">PING TELEGRAM</button>
+                            <button class="btn-warn" onclick="sendTestTelegram()">TEST KIRIM TELEGRAM</button>
                         </div>
                         <div class="quick-switches">
                             <button class="switch-btn" onclick="quickRestart('CGSIN')"><span>CGSIN</span><span>ARM</span></button>
@@ -621,13 +671,13 @@ $summary = eos_dashboard_summary();
                             <button class="switch-btn" onclick="quickGroup('CGSIN_STACK')"><span>CGSIN_STACK</span><span>RUN</span></button>
                             <button class="switch-btn" onclick="quickGroup('CORE_SERVICES')"><span>CORE_SERVICES</span><span>RUN</span></button>
                         </div>
-                        <div class="hint">Command Telegram aktif: <code>/disk</code>, <code>/health</code>, <code>/restart POOL</code>, <code>/restart-group GROUP</code>, <code>/iis</code>.</div>
+                        <div class="hint">Command Telegram aktif: <code>/disk</code>, <code>/network</code>, <code>/health</code>, <code>/restart POOL</code>, <code>/restart-group GROUP</code>, dan <code>/iis</code>. Bot juga akan membalas jika pesannya di-reply atau saat namanya disebut.</div>
                     </section>
 
                     <section class="panel stack">
                         <div>
                             <h2>Sensor Rack</h2>
-                            <p>Disk monitor dan image fetch bekerja sebagai sensor/reader module.</p>
+                            <p>Disk monitor, network bus, dan image fetch bekerja sebagai sensor/reader module.</p>
                             <div class="telemetry">
                                 <div class="telemetry-box">
                                     <div>DISK STATUS</div>
@@ -635,16 +685,19 @@ $summary = eos_dashboard_summary();
                                     <div class="small" id="statDiskDetail"><?= eos_h(($summary['disk']['free_human'] ?? '-') . ' free dari ' . ($summary['disk']['total_human'] ?? '-')) ?></div>
                                 </div>
                                 <div class="telemetry-box">
-                                    <div>BOT LINK</div>
-                                    <div class="big">ACTIVE</div>
-                                    <div class="small">Polling, webhook, dan alert sink siap dipakai.</div>
+                                    <div>NET BUS</div>
+                                    <div class="big" id="netBusTile"><?= strtoupper(eos_h((string) ($summary['network']['overall'] ?? 'standby'))) ?></div>
+                                    <div class="small" id="netBusDetail">Scan IP server, kamera, dan domain operasional.</div>
                                 </div>
                             </div>
                             <div class="hint" id="diskPanel">Memuat status disk...</div>
                             <div class="button-grid">
                                 <button class="btn-main" onclick="checkDisk(false)">REFRESH DISK</button>
                                 <button class="btn-soft" onclick="checkDisk(true)">REPORT TO TG</button>
+                                <button class="btn-main" onclick="scanNetwork(false)">SCAN NETWORK</button>
+                                <button class="btn-soft" onclick="scanNetwork(true)">SCAN + LOG</button>
                             </div>
+                            <div id="networkGrid" class="network-grid"></div>
                         </div>
                         <div>
                             <div class="field">
@@ -667,7 +720,7 @@ $summary = eos_dashboard_summary();
 
                     <section class="panel">
                         <h2>Serial Terminal</h2>
-                        <p>Output live seperti monitor serial untuk operator.</p>
+                        <p>Output live seperti monitor serial untuk operator dengan format log yang lebih jelas.</p>
                         <div id="outputBox" class="terminal">Menunggu perintah...</div>
                         <div class="endpoint"><strong>Disk monitor</strong><br><code>monitor.php?key=<?= eos_h(eos_config('telegram.webhook_key')) ?></code></div>
                         <div class="endpoint"><strong>Telegram poll</strong><br><code>telegram_poll.php?key=<?= eos_h(eos_config('telegram.webhook_key')) ?></code></div>
@@ -682,7 +735,7 @@ $summary = eos_dashboard_summary();
                         <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;">
                             <div>
                                 <h3>Bus Activity Log</h3>
-                                <p>Riwayat eksekusi restart, disk, dan image fetch.</p>
+                                <p>Riwayat eksekusi utama dengan format level, module, actor, dan context.</p>
                             </div>
                             <button class="btn-soft" onclick="refreshLogs()">REFRESH</button>
                         </div>
@@ -699,9 +752,19 @@ $summary = eos_dashboard_summary();
                         <div id="telegramLog" class="log-box"><?= eos_h(implode("\n", $summary['telegram_logs'])) ?></div>
                     </section>
                     <section class="panel">
+                        <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;">
+                            <div>
+                                <h3>Network Log</h3>
+                                <p>Status cek IP server, kamera, dan domain.</p>
+                            </div>
+                            <button class="btn-soft" onclick="refreshLogs()">REFRESH</button>
+                        </div>
+                        <div id="networkLog" class="log-box"><?= eos_h(implode("\n", $summary['network_logs'])) ?></div>
+                    </section>
+                    <section class="panel">
                         <h3>Microcontroller Notes</h3>
                         <p>Konsep ini membuat tiap fitur terasa seperti modul papan kontrol, bukan menu terpisah.</p>
-                        <div class="hint">`IIS BUS` untuk aksi reset, `DISK SENSOR` untuk health check, `TELEGRAM RX/TX` untuk komunikasi, `IMAGE FETCH` untuk pembacaan backup, dan `AUTOMATION` untuk loop scheduler.</div>
+                        <div class="hint">`IIS BUS` untuk aksi reset, `DISK SENSOR` untuk health check, `NET BUS` untuk reachability jaringan, `TELEGRAM RX/TX` untuk komunikasi, `IMAGE FETCH` untuk pembacaan backup, dan `AUTOMATION` untuk loop scheduler.</div>
                         <div class="hint">Scheduler Windows cukup memanggil endpoint monitor dan poll secara periodik, sehingga board tetap ringan tanpa daemon panjang di PHP.</div>
                     </section>
                 </div>
@@ -741,6 +804,35 @@ $summary = eos_dashboard_summary();
                     <div class="module-meta">${module.meta}</div>
                 </article>
             `).join('');
+        }
+
+        function getStateColor(status) {
+            if (status === 'online' || status === 'ready') return '#27d3a2';
+            if (status === 'warning' || status === 'standby') return '#f6c14b';
+            return '#ff6b6b';
+        }
+
+        function renderNetworkTargets(targets) {
+            const root = document.getElementById('networkGrid');
+            root.innerHTML = targets.map((target) => {
+                const color = getStateColor(target.status);
+                return `
+                    <article class="network-card">
+                        <div class="top">
+                            <div class="name">${target.label}</div>
+                            <div class="state" style="color:${color}">
+                                <span class="state-dot" style="color:${color};background:${color}"></span>
+                                <span>${String(target.status).toUpperCase()}</span>
+                            </div>
+                        </div>
+                        <div class="endpoint-text">${target.endpoint}</div>
+                        <div class="detail">
+                            Latency: ${target.latency || '-'}<br>
+                            Detail: ${target.detail || '-'}
+                        </div>
+                    </article>
+                `;
+            }).join('');
         }
 
         async function runRestartPool() {
@@ -843,6 +935,25 @@ $summary = eos_dashboard_summary();
             }
         }
 
+        async function scanNetwork(writeLog) {
+            try {
+                document.getElementById('netBusDetail').textContent = 'Scanning target jaringan...';
+                const result = await api(writeLog ? '?api=network&log=1' : '?api=network');
+                const network = result.data;
+                document.getElementById('networkState').textContent = String(network.overall).toUpperCase();
+                document.getElementById('networkHeadline').textContent = String(network.overall).toUpperCase();
+                document.getElementById('netBusTile').textContent = String(network.overall).toUpperCase();
+                document.getElementById('networkScanTime').textContent = network.updated_at || '-';
+                document.getElementById('netBusDetail').textContent = `${network.targets.filter(t => t.status === 'online').length}/${network.targets.length} target online`;
+                renderNetworkTargets(network.targets);
+                if (writeLog) {
+                    refreshLogs();
+                }
+            } catch (error) {
+                document.getElementById('netBusDetail').textContent = 'ERROR: ' + error.message;
+            }
+        }
+
         async function findImages() {
             const gate = document.getElementById('gateName').value;
             const datetime = document.getElementById('photoTime').value;
@@ -876,12 +987,14 @@ $summary = eos_dashboard_summary();
 
         async function refreshLogs() {
             try {
-                const [activity, telegram] = await Promise.all([
+                const [activity, telegram, network] = await Promise.all([
                     api('?api=logs&type=app'),
-                    api('?api=logs&type=telegram')
+                    api('?api=logs&type=telegram'),
+                    api('?api=logs&type=network')
                 ]);
                 document.getElementById('activityLog').textContent = activity.logs.join('\n');
                 document.getElementById('telegramLog').textContent = telegram.logs.join('\n');
+                document.getElementById('networkLog').textContent = network.logs.join('\n');
             } catch (error) {
                 setOutput('ERROR: ' + error.message);
             }
@@ -895,6 +1008,10 @@ $summary = eos_dashboard_summary();
                 document.getElementById('busStateBar').textContent = result.data.board.bus_state;
                 document.getElementById('controllerState').textContent = result.data.controller.armed ? 'ARMED' : 'DISARMED';
                 document.getElementById('controllerLast').textContent = result.data.controller.last_command;
+                document.getElementById('moduleCount').textContent = result.data.board.module_count;
+                document.getElementById('networkState').textContent = String(result.data.network.overall || 'standby').toUpperCase();
+                document.getElementById('networkHeadline').textContent = String(result.data.network.overall || 'standby').toUpperCase();
+                document.getElementById('networkScanTime').textContent = result.data.network.updated_at || '-';
                 renderModules(result.data.modules);
             } catch (error) {
             }
@@ -903,13 +1020,16 @@ $summary = eos_dashboard_summary();
         function refreshAll() {
             refreshLogs();
             checkDisk(false);
+            scanNetwork(false);
             refreshSummary();
         }
 
         checkDisk(false);
+        scanNetwork(false);
         setInterval(refreshSummary, 1000);
         setInterval(refreshLogs, 10000);
         setInterval(() => checkDisk(false), 30000);
+        setInterval(() => scanNetwork(false), 30000);
     </script>
 </body>
 </html>

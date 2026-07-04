@@ -41,6 +41,7 @@ function eos_ensure_runtime(): void
         eos_config('paths.logs'),
         dirname(eos_config('disk.state_file')),
         dirname(eos_config('controller.state_file')),
+        dirname(eos_config('network.state_file')),
         dirname(eos_config('telegram.poll_state_file')),
         eos_config('images.cache_dir'),
     ];
@@ -51,7 +52,7 @@ function eos_ensure_runtime(): void
         }
     }
 
-    foreach ([eos_config('paths.app_log'), eos_config('paths.telegram_log')] as $file) {
+    foreach ([eos_config('paths.app_log'), eos_config('paths.telegram_log'), eos_config('paths.network_log')] as $file) {
         if (!is_file($file)) {
             @file_put_contents($file, '');
         }
@@ -112,10 +113,37 @@ function eos_json(array $payload, int $status = 200): void
 
 function eos_log(string $message, string $type = 'app', ?string $actor = null): void
 {
-    $file = $type === 'telegram' ? eos_config('paths.telegram_log') : eos_config('paths.app_log');
+    $logMap = [
+        'app' => eos_config('paths.app_log'),
+        'telegram' => eos_config('paths.telegram_log'),
+        'network' => eos_config('paths.network_log'),
+    ];
+    $file = $logMap[$type] ?? eos_config('paths.app_log');
     $user = $actor ?: (eos_current_user() ?: 'system');
     $line = sprintf("[%s] [%s] %s\n", date('Y-m-d H:i:s'), $user, trim($message));
     @file_put_contents($file, $line, FILE_APPEND);
+}
+
+function eos_log_event(string $module, string $event, string $level = 'INFO', array $context = [], ?string $actor = null, string $type = 'app'): void
+{
+    $module = strtoupper(trim($module));
+    $level = strtoupper(trim($level));
+    $actor = $actor ?: (eos_current_user() ?: 'system');
+
+    $pairs = [];
+    foreach ($context as $key => $value) {
+        if (is_array($value) || is_object($value)) {
+            $value = json_encode($value, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        }
+        $pairs[] = $key . '=' . str_replace(["\n", "\r"], ' ', (string) $value);
+    }
+
+    $message = sprintf('[%s] [%s] [%s] %s', $level, $module, $actor, $event);
+    if ($pairs) {
+        $message .= ' | ' . implode(' | ', $pairs);
+    }
+
+    eos_log($message, $type, $actor);
 }
 
 function eos_tail(string $file, int $limit = 80): array
@@ -153,7 +181,7 @@ function eos_http_post_json(string $url, array $payload, int $timeout = 12): arr
     ];
 }
 
-function eos_send_telegram(string $message, ?array $chatIds = null): array
+function eos_send_telegram(string $message, ?array $chatIds = null, array $options = []): array
 {
     $chatIds = $chatIds ?: eos_config('telegram.chat_ids', []);
     $token = (string) eos_config('telegram.bot_token', '');
@@ -167,11 +195,13 @@ function eos_send_telegram(string $message, ?array $chatIds = null): array
     foreach ($chatIds as $chatId) {
         $response = eos_http_post_json(
             'https://api.telegram.org/bot' . $token . '/sendMessage',
-            [
+            array_filter([
                 'chat_id' => $chatId,
                 'text' => $message,
                 'parse_mode' => 'HTML',
-            ]
+                'reply_to_message_id' => $options['reply_to_message_id'] ?? null,
+                'disable_web_page_preview' => $options['disable_web_page_preview'] ?? true,
+            ], static fn($value) => $value !== null)
         );
 
         $results[] = ['chat_id' => $chatId, 'response' => $response];
@@ -184,6 +214,80 @@ function eos_send_telegram(string $message, ?array $chatIds = null): array
     }
 
     return ['ok' => true, 'results' => $results];
+}
+
+function eos_telegram_display_name(array $message): string
+{
+    $from = $message['from'] ?? [];
+    $name = trim((string) (($from['first_name'] ?? '') . ' ' . ($from['last_name'] ?? '')));
+    if ($name !== '') {
+        return $name;
+    }
+    if (!empty($from['username'])) {
+        return '@' . $from['username'];
+    }
+    return 'rekan';
+}
+
+function eos_telegram_is_addressed(string $text, array $message): bool
+{
+    $lower = strtolower(trim($text));
+    if ($lower === '') {
+        return false;
+    }
+
+    foreach ((array) eos_config('telegram.aliases', []) as $alias) {
+        if (strpos($lower, strtolower($alias)) !== false) {
+            return true;
+        }
+    }
+
+    $reply = $message['reply_to_message'] ?? [];
+    if (($reply['from']['is_bot'] ?? false) === true) {
+        return true;
+    }
+
+    return false;
+}
+
+function eos_telegram_human_reply(string $text, array $message): ?string
+{
+    $lower = strtolower(trim($text));
+    $name = eos_telegram_display_name($message);
+    $botName = (string) eos_config('telegram.bot_name', 'EOS Tools');
+
+    if ($lower === '') {
+        return null;
+    }
+
+    if (preg_match('/\b(halo|hallo|hai|hello|pagi|siang|sore|malam)\b/u', $lower)) {
+        return "Halo {$name}, {$botName} siap bantu. Kalau mau cek cepat, coba ketik /health atau /disk.";
+    }
+
+    if (strpos($lower, 'terima kasih') !== false || strpos($lower, 'makasih') !== false || strpos($lower, 'thanks') !== false) {
+        return "Sama-sama {$name}. Kalau ada yang mau dicek lagi, tinggal panggil {$botName}.";
+    }
+
+    if (strpos($lower, 'siapa kamu') !== false || strpos($lower, 'kamu siapa') !== false) {
+        return "{$botName} adalah control board assistant untuk restart service, cek disk, pantau jaringan, dan bantu operasional lewat Telegram.";
+    }
+
+    if (strpos($lower, 'status') !== false || strpos($lower, 'kondisi') !== false) {
+        $summary = eos_dashboard_summary();
+        $online = 0;
+        foreach (($summary['network']['targets'] ?? []) as $target) {
+            if (($target['status'] ?? '') === 'online') {
+                $online++;
+            }
+        }
+        return "Status singkat saat ini: bus {$summary['board']['bus_state']}, disk {$summary['disk']['status']}, network {$online}/" . count($summary['network']['targets'] ?? []) . " target online.";
+    }
+
+    if (preg_match('/\b(tolong|bantu|cek)\b/u', $lower)) {
+        return "Siap {$name}. Saya bisa bantu cek /disk, /health, restart pool dengan /restart NAMA_POOL, atau restart group dengan /restart-group NAMA_GROUP.";
+    }
+
+    return "Saya tangkap pesan Anda, {$name}. Kalau ingin aksi cepat, sebut saja yang mau dicek atau pakai command seperti /disk, /health, /restart, atau /iis.";
 }
 
 function eos_run_powershell(string $script): array
@@ -306,6 +410,12 @@ PS;
 
     eos_log($summary);
     eos_log($run['output'] !== '' ? $run['output'] : 'Tidak ada output PowerShell.');
+    eos_log_event('IIS', 'restart_pool', $ok ? 'INFO' : 'WARN', [
+        'pool' => $normalized,
+        'duration' => $duration . 's',
+        'state' => $parsed['finalState'] ?? 'Unknown',
+        'note' => $note ?: '-',
+    ], $actor);
     eos_send_telegram(
         "♻️ <b>Restart App Pool</b>\nPool: <b>{$normalized}</b>\nUser: <b>{$actor}</b>\nCatatan: " .
         eos_format_plain($note ?: '-') .
@@ -341,6 +451,12 @@ function eos_restart_group(string $groupKey, string $note = '', ?string $actor =
     }
 
     eos_log("Restart group {$normalized} selesai dengan status " . ($allOk ? 'OK' : 'PERLU CEK'));
+    eos_log_event('IIS', 'restart_group', $allOk ? 'INFO' : 'WARN', [
+        'group' => $normalized,
+        'total_pool' => count($results),
+        'status' => $allOk ? 'OK' : 'PERLU_CEK',
+        'note' => $note ?: '-',
+    ], $actor ?: (eos_current_user() ?: 'system'));
 
     return [
         'ok' => $allOk,
@@ -363,6 +479,11 @@ function eos_restart_iis(string $reason = '', ?string $actor = null): array
 
     eos_log("Restart IIS oleh {$actor}. Alasan: " . ($reason ?: '-'));
     eos_log($text !== '' ? $text : 'Tidak ada output dari iisreset.');
+    eos_log_event('IIS', 'restart_iis', $ok ? 'INFO' : 'WARN', [
+        'duration' => $duration . 's',
+        'code' => $code,
+        'reason' => $reason ?: '-',
+    ], $actor);
     eos_send_telegram(
         "🚨 <b>Restart IIS</b>\nUser: <b>{$actor}</b>\nAlasan: " . eos_format_plain($reason ?: '-') .
         "\nDurasi: {$duration}s\nStatus: <b>" . ($ok ? 'BERHASIL' : 'PERLU CEK') . '</b>'
@@ -428,11 +549,21 @@ function eos_monitor_disk(bool $forceNotify = false): array
             "⚠️ <b>Disk Space Warning</b>\nDrive: <b>{$report['drive']}</b>\nFree: <b>{$report['free_human']}</b> ({$report['free_percent']}%)\nUsed: {$report['used_human']} ({$report['used_percent']}%)"
         );
         eos_log('Disk warning terkirim ke Telegram.');
+        eos_log_event('DISK', 'warning_sent', 'WARN', [
+            'drive' => $report['drive'],
+            'free_percent' => $report['free_percent'],
+            'free_space' => $report['free_human'],
+        ]);
     } elseif ($forceNotify) {
         eos_send_telegram(
             "ℹ️ <b>Disk Space Report</b>\nDrive: <b>{$report['drive']}</b>\nFree: <b>{$report['free_human']}</b> ({$report['free_percent']}%)\nUsed: {$report['used_human']} ({$report['used_percent']}%)\nStatus: " . strtoupper($report['status'])
         );
         eos_log('Disk report manual terkirim ke Telegram.');
+        eos_log_event('DISK', 'manual_report_sent', 'INFO', [
+            'drive' => $report['drive'],
+            'free_percent' => $report['free_percent'],
+            'status' => $report['status'],
+        ]);
     }
 
     file_put_contents($stateFile, json_encode([
@@ -443,6 +574,178 @@ function eos_monitor_disk(bool $forceNotify = false): array
     ], JSON_PRETTY_PRINT));
 
     return $report;
+}
+
+function eos_network_cached_state(): array
+{
+    $stateFile = eos_config('network.state_file');
+    if (!is_file($stateFile)) {
+        return [
+            'updated_at' => null,
+            'overall' => 'standby',
+            'targets' => [],
+        ];
+    }
+
+    $state = json_decode((string) file_get_contents($stateFile), true);
+    return is_array($state) ? $state : [
+        'updated_at' => null,
+        'overall' => 'standby',
+        'targets' => [],
+    ];
+}
+
+function eos_network_ping_target(string $host, int $timeoutSeconds): array
+{
+    $hostArg = escapeshellarg($host);
+    if (PHP_OS_FAMILY === 'Windows') {
+        $command = 'ping -n 1 -w ' . ((int) $timeoutSeconds * 1000) . ' ' . $hostArg . ' 2>&1';
+    } else {
+        $command = 'ping -c 1 -W ' . (int) $timeoutSeconds . ' ' . $hostArg . ' 2>&1';
+    }
+
+    $output = [];
+    $code = 1;
+    @exec($command, $output, $code);
+    $text = trim(implode("\n", $output));
+
+    return [
+        'ok' => $code === 0,
+        'latency' => eos_parse_ping_latency($text),
+        'detail' => $text,
+    ];
+}
+
+function eos_parse_ping_latency(string $text): ?string
+{
+    if (preg_match('/time[=<]([0-9\.]+)\s*ms/i', $text, $match)) {
+        return $match[1] . ' ms';
+    }
+    if (preg_match('/Average = ([0-9]+)ms/i', $text, $match)) {
+        return $match[1] . ' ms';
+    }
+    return null;
+}
+
+function eos_network_http_target(string $url, int $timeoutSeconds): array
+{
+    $ch = curl_init($url);
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_NOBODY => true,
+        CURLOPT_FOLLOWLOCATION => true,
+        CURLOPT_CONNECTTIMEOUT => $timeoutSeconds,
+        CURLOPT_TIMEOUT => $timeoutSeconds,
+        CURLOPT_SSL_VERIFYPEER => false,
+        CURLOPT_SSL_VERIFYHOST => false,
+    ]);
+    curl_exec($ch);
+    $error = curl_error($ch);
+    $status = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $time = (float) curl_getinfo($ch, CURLINFO_TOTAL_TIME);
+    curl_close($ch);
+
+    return [
+        'ok' => $error === '' && $status >= 200 && $status < 500,
+        'latency' => $time > 0 ? round($time * 1000) . ' ms' : null,
+        'detail' => $error !== '' ? $error : 'HTTP ' . $status,
+        'status_code' => $status,
+    ];
+}
+
+function eos_network_monitor(bool $forceLog = false): array
+{
+    $targets = eos_config('network.targets', []);
+    $timeout = (int) eos_config('network.timeout_seconds', 2);
+    $previousState = eos_network_cached_state();
+    $previousTargets = [];
+    foreach (($previousState['targets'] ?? []) as $target) {
+        $previousTargets[$target['key']] = $target;
+    }
+    $results = [];
+    $hasWarning = false;
+    $hasFault = false;
+
+    foreach ($targets as $target) {
+        $type = $target['type'] ?? 'ping';
+        $label = $target['label'] ?? ($target['host'] ?? $target['url'] ?? 'unknown');
+        $startedAt = microtime(true);
+
+        if ($type === 'http') {
+            $check = eos_network_http_target((string) $target['url'], $timeout);
+            $endpoint = (string) $target['url'];
+        } else {
+            $check = eos_network_ping_target((string) $target['host'], $timeout);
+            $endpoint = (string) $target['host'];
+        }
+
+        $duration = round((microtime(true) - $startedAt) * 1000);
+        $status = $check['ok'] ? 'online' : 'offline';
+        if (!$check['ok']) {
+            $hasFault = true;
+        }
+
+        $row = [
+            'key' => $target['key'] ?? md5($label),
+            'label' => $label,
+            'type' => $type,
+            'endpoint' => $endpoint,
+            'status' => $status,
+            'latency' => $check['latency'] ?? null,
+            'detail' => $check['detail'] ?? '',
+            'duration_ms' => $duration,
+        ];
+
+        if (isset($check['status_code'])) {
+            $row['status_code'] = $check['status_code'];
+            if ($check['status_code'] >= 400) {
+                $hasWarning = true;
+            }
+        }
+
+        $previousTarget = $previousTargets[$row['key']] ?? null;
+        $previousStatus = $previousTarget['status'] ?? null;
+        if (
+            eos_config('network.notify_on_change', true) &&
+            $previousStatus !== null &&
+            $previousStatus !== $status
+        ) {
+            $emoji = $status === 'online' ? '✅' : '🚨';
+            $stateLabel = $status === 'online' ? 'KEMBALI ONLINE' : 'PUTUS / OFFLINE';
+            eos_send_telegram(
+                "{$emoji} <b>Network State Change</b>\nTarget: <b>{$label}</b>\nEndpoint: <code>{$endpoint}</code>\nStatus: <b>{$stateLabel}</b>\nSebelumnya: <b>" . strtoupper($previousStatus) . "</b>\nLatency: <b>" . eos_format_plain((string) ($row['latency'] ?: '-')) . "</b>\nDetail: " . eos_format_plain((string) $row['detail'])
+            );
+            eos_log_event('NET', 'state_change', $status === 'online' ? 'INFO' : 'ERROR', [
+                'target' => $label,
+                'endpoint' => $endpoint,
+                'from' => $previousStatus,
+                'to' => $status,
+                'latency' => $row['latency'] ?: '-',
+            ], null, 'network');
+        }
+
+        if ($forceLog || !$check['ok']) {
+            eos_log_event('NET', 'target_check', $check['ok'] ? 'INFO' : 'ERROR', [
+                'target' => $label,
+                'endpoint' => $endpoint,
+                'status' => $status,
+                'latency' => $row['latency'] ?: '-',
+                'detail' => $row['detail'],
+            ], null, 'network');
+        }
+
+        $results[] = $row;
+    }
+
+    $overall = $hasFault ? 'fault' : ($hasWarning ? 'warning' : 'ready');
+    $payload = [
+        'updated_at' => date('c'),
+        'overall' => $overall,
+        'targets' => $results,
+    ];
+
+    file_put_contents(eos_config('network.state_file'), json_encode($payload, JSON_PRETTY_PRINT));
+    return $payload;
 }
 
 function eos_find_backup_images(string $gate, string $dateTimeInput): array
@@ -512,6 +815,11 @@ function eos_find_backup_images(string $gate, string $dateTimeInput): array
     }
 
     eos_log("Image search {$gate} {$dateTimeInput} menghasilkan " . count($results) . ' file.');
+    eos_log_event('IMG', 'image_fetch', 'INFO', [
+        'gate' => $gate,
+        'datetime' => $dateTimeInput,
+        'result_count' => count($results),
+    ]);
 
     return [
         'ok' => true,
@@ -542,7 +850,8 @@ function eos_format_plain(string $value): string
 function eos_dashboard_summary(): array
 {
     $disk = eos_disk_space_report();
-    $modules = eos_controller_modules($disk);
+    $network = eos_network_cached_state();
+    $modules = eos_controller_modules($disk, $network);
     $controller = eos_controller_state();
     return [
         'app_name' => eos_config('app_name'),
@@ -551,6 +860,7 @@ function eos_dashboard_summary(): array
         'server_time' => date('Y-m-d H:i:s'),
         'user' => eos_current_user(),
         'disk' => $disk,
+        'network' => $network,
         'pools' => eos_config('iis.app_pools', []),
         'groups' => array_keys(eos_config('iis.restart_groups', [])),
         'gates' => eos_config('images.gates', []),
@@ -564,16 +874,25 @@ function eos_dashboard_summary(): array
         ],
         'activity_logs' => eos_tail(eos_config('paths.app_log'), 12),
         'telegram_logs' => eos_tail(eos_config('paths.telegram_log'), 12),
+        'network_logs' => eos_tail(eos_config('paths.network_log'), 12),
     ];
 }
 
-function eos_controller_modules(?array $disk = null): array
+function eos_controller_modules(?array $disk = null, ?array $network = null): array
 {
     $disk = $disk ?: eos_disk_space_report();
+    $network = $network ?: eos_network_cached_state();
     $telegramReady = eos_config('telegram.bot_token', '') !== '' && count(eos_config('telegram.chat_ids', [])) > 0;
     $imageRoots = eos_config('images.roots', []);
     $statePath = eos_config('disk.state_file');
     $stateExists = is_file($statePath);
+    $networkTargets = $network['targets'] ?? [];
+    $networkOnline = 0;
+    foreach ($networkTargets as $target) {
+        if (($target['status'] ?? '') === 'online') {
+            $networkOnline++;
+        }
+    }
 
     return [
         [
@@ -615,6 +934,16 @@ function eos_controller_modules(?array $disk = null): array
             'led' => $stateExists ? '#a3e635' : '#eab308',
             'description' => 'Scheduler disk monitor dan telegram poll.',
             'meta' => $stateExists ? 'state file aktif' : 'menunggu scheduler pertama',
+        ],
+        [
+            'key' => 'NET',
+            'label' => 'NET BUS',
+            'status' => $network['overall'] ?? 'standby',
+            'led' => ($network['overall'] ?? 'standby') === 'ready'
+                ? '#27d3a2'
+                : (($network['overall'] ?? 'standby') === 'warning' ? '#f6c14b' : (($network['overall'] ?? 'standby') === 'fault' ? '#ff6b6b' : '#eab308')),
+            'description' => 'Cek reachability server, kamera, dan domain operasional.',
+            'meta' => $networkOnline . '/' . count(eos_config('network.targets', [])) . ' target online',
         ],
     ];
 }
@@ -662,6 +991,7 @@ function eos_controller_command(string $cmd, array $payload = [], ?string $actor
         $state['last_target'] = '-';
         $state['last_result'] = 'armed';
         eos_log('Controller armed oleh ' . $actor);
+        eos_log_event('CTRL', 'arm', 'INFO', ['state' => 'armed'], $actor);
         return ['ok' => true, 'message' => 'Controller armed.', 'state' => eos_controller_save_state($state)];
     }
 
@@ -671,6 +1001,7 @@ function eos_controller_command(string $cmd, array $payload = [], ?string $actor
         $state['last_target'] = '-';
         $state['last_result'] = 'disarmed';
         eos_log('Controller disarm/reset oleh ' . $actor);
+        eos_log_event('CTRL', $cmd, 'INFO', ['state' => 'disarmed'], $actor);
         return ['ok' => true, 'message' => 'Controller disarmed.', 'state' => eos_controller_save_state($state)];
     }
 
@@ -771,11 +1102,13 @@ function eos_telegram_process_update(array $update): array
 
     $lower = strtolower($text);
     eos_log('Perintah Telegram diterima: ' . $text, 'telegram', 'telegram');
+    $replyMessageId = $message['message_id'] ?? null;
 
     if ($lower === '/start' || $lower === '/help') {
         eos_send_telegram(
             "EOS Tools siap.\nPerintah:\n/disk\n/health\n/restart <POOL>\n/restart-group <GROUP>\n/iis",
-            [$chatId]
+            [$chatId],
+            ['reply_to_message_id' => $replyMessageId]
         );
         return ['handled' => true, 'command' => 'help'];
     }
@@ -784,9 +1117,26 @@ function eos_telegram_process_update(array $update): array
         $disk = eos_monitor_disk(true);
         eos_send_telegram(
             "📦 <b>Disk Report</b>\nDrive: <b>{$disk['drive']}</b>\nFree: <b>{$disk['free_human']}</b> ({$disk['free_percent']}%)\nUsed: {$disk['used_human']} ({$disk['used_percent']}%)\nStatus: <b>" . strtoupper($disk['status']) . '</b>',
-            [$chatId]
+            [$chatId],
+            ['reply_to_message_id' => $replyMessageId]
         );
         return ['handled' => true, 'command' => 'disk'];
+    }
+
+    if ($lower === '/network' || $lower === '/net') {
+        $network = eos_network_monitor(true);
+        $online = 0;
+        foreach (($network['targets'] ?? []) as $target) {
+            if (($target['status'] ?? '') === 'online') {
+                $online++;
+            }
+        }
+        eos_send_telegram(
+            "🌐 <b>Network Report</b>\nStatus bus: <b>" . strtoupper((string) $network['overall']) . "</b>\nTarget online: <b>{$online}/" . count($network['targets'] ?? []) . "</b>",
+            [$chatId],
+            ['reply_to_message_id' => $replyMessageId]
+        );
+        return ['handled' => true, 'command' => 'network'];
     }
 
     if ($lower === '/health') {
@@ -794,7 +1144,8 @@ function eos_telegram_process_update(array $update): array
         $disk = $summary['disk'];
         eos_send_telegram(
             "🩺 <b>EOS Tools Health</b>\nTime: {$summary['server_time']}\nDisk C Free: {$disk['free_human']} ({$disk['free_percent']}%)\nJumlah Pool: " . count($summary['pools']),
-            [$chatId]
+            [$chatId],
+            ['reply_to_message_id' => $replyMessageId]
         );
         return ['handled' => true, 'command' => 'health'];
     }
@@ -803,7 +1154,8 @@ function eos_telegram_process_update(array $update): array
         $result = eos_restart_app_pool($match[1], 'Dari Telegram', 'telegram');
         eos_send_telegram(
             ($result['ok'] ? '✅' : '⚠️') . ' Restart pool ' . strtoupper($match[1]) . ': ' . $result['message'],
-            [$chatId]
+            [$chatId],
+            ['reply_to_message_id' => $replyMessageId]
         );
         return ['handled' => true, 'command' => 'restart_pool'];
     }
@@ -812,7 +1164,8 @@ function eos_telegram_process_update(array $update): array
         $result = eos_restart_group($match[1], 'Dari Telegram', 'telegram');
         eos_send_telegram(
             ($result['ok'] ? '✅' : '⚠️') . ' Restart group ' . strtoupper($match[1]) . ': ' . $result['message'],
-            [$chatId]
+            [$chatId],
+            ['reply_to_message_id' => $replyMessageId]
         );
         return ['handled' => true, 'command' => 'restart_group'];
     }
@@ -821,9 +1174,22 @@ function eos_telegram_process_update(array $update): array
         $result = eos_restart_iis('Perintah Telegram', 'telegram');
         eos_send_telegram(
             ($result['ok'] ? '✅' : '⚠️') . ' Restart IIS: ' . $result['message'],
-            [$chatId]
+            [$chatId],
+            ['reply_to_message_id' => $replyMessageId]
         );
         return ['handled' => true, 'command' => 'restart_iis'];
+    }
+
+    if (eos_telegram_is_addressed($text, $message)) {
+        $reply = eos_telegram_human_reply($text, $message);
+        if ($reply) {
+            eos_send_telegram($reply, [$chatId], ['reply_to_message_id' => $replyMessageId]);
+            eos_log_event('TG', 'chat_reply', 'INFO', [
+                'chat_id' => $chatId,
+                'message' => $text,
+            ], 'telegram', 'telegram');
+            return ['handled' => true, 'command' => 'chat_reply'];
+        }
     }
 
     eos_send_telegram('Perintah tidak dikenali. Kirim /help untuk daftar perintah.', [$chatId]);
