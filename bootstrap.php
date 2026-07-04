@@ -10,10 +10,25 @@ if (is_file($localOverride)) {
 }
 
 date_default_timezone_set($eosConfig['timezone']);
+eos_prepare_session_storage($eosConfig);
 session_name('EOSTOOLSSESSID');
 session_start();
 
 eos_ensure_runtime();
+
+function eos_prepare_session_storage(array $config): void
+{
+    $storageRoot = $config['paths']['storage'] ?? (__DIR__ . '/storage');
+    $sessionPath = $storageRoot . '/sessions';
+
+    if (!is_dir($sessionPath)) {
+        @mkdir($sessionPath, 0777, true);
+    }
+
+    if (is_dir($sessionPath) && is_writable($sessionPath)) {
+        session_save_path($sessionPath);
+    }
+}
 
 function eos_config(?string $key = null, $default = null)
 {
@@ -303,6 +318,11 @@ function eos_telegram_human_reply(string $text, array $message): ?string
         return null;
     }
 
+    $smartReply = eos_telegram_smart_intent_reply($lower, $name, $botName);
+    if ($smartReply !== null) {
+        return $smartReply;
+    }
+
     if (preg_match('/\b(halo|hallo|hai|hello|pagi|siang|sore|malam)\b/u', $lower)) {
         return "Halo {$name}, {$botName} siap bantu. Kalau mau cek cepat, coba ketik /health atau /disk.";
     }
@@ -331,6 +351,51 @@ function eos_telegram_human_reply(string $text, array $message): ?string
     }
 
     return "Saya tangkap pesan Anda, {$name}. Kalau ingin aksi cepat, sebut saja yang mau dicek atau pakai command seperti /disk, /health, /restart, atau /iis.";
+}
+
+function eos_telegram_smart_intent_reply(string $lower, string $name, string $botName): ?string
+{
+    $asksDisk = preg_match('/\b(disk|storage|penyimpanan|kapasitas|drive c|sisa disk|disk tinggal)\b/u', $lower) === 1;
+    $asksNetwork = preg_match('/\b(jaringan|network|internet|server|ping|kamera|domain|host)\b/u', $lower) === 1;
+    $asksHow = preg_match('/\b(bagaimana|gimana|berapa|sehat|aman|normal|status|kondisi|tinggal)\b/u', $lower) === 1;
+
+    if ($asksDisk) {
+        $disk = eos_disk_space_report();
+        if (!($disk['ok'] ?? false)) {
+            return "{$name}, saya belum bisa baca disk saat ini. Detailnya: " . ($disk['message'] ?? 'unknown error') . ".";
+        }
+
+        return "{$name}, sisa disk {$disk['drive']} sekarang {$disk['free_human']} atau {$disk['free_percent']}%. " .
+            "Yang terpakai {$disk['used_human']} ({$disk['used_percent']}%). Statusnya " . strtoupper((string) $disk['status']) . '.';
+    }
+
+    if ($asksNetwork || ($asksHow && preg_match('/\b(server|koneksi|domain|kamera)\b/u', $lower) === 1)) {
+        $network = eos_network_monitor(false);
+        $targets = $network['targets'] ?? [];
+        $online = 0;
+        $offlineNames = [];
+        foreach ($targets as $target) {
+            if (($target['status'] ?? '') === 'online') {
+                $online++;
+            } else {
+                $offlineNames[] = $target['label'] ?? 'unknown';
+            }
+        }
+
+        if (!$targets) {
+            return "{$name}, saya belum dapat data jaringan saat ini.";
+        }
+
+        if (!$offlineNames) {
+            return "{$name}, jaringan terpantau bagus. Semua target online ({$online}/" . count($targets) . ").";
+        }
+
+        $offlineText = implode(', ', array_slice($offlineNames, 0, 3));
+        return "{$name}, kondisi jaringan saat ini " . strtoupper((string) $network['overall']) . ". " .
+            "Target online {$online}/" . count($targets) . ". Yang perlu dicek: {$offlineText}.";
+    }
+
+    return null;
 }
 
 function eos_run_powershell(string $script): array
@@ -909,6 +974,10 @@ function eos_dashboard_summary(): array
         'pools' => eos_config('iis.app_pools', []),
         'groups' => array_keys(eos_config('iis.restart_groups', [])),
         'gates' => eos_config('images.gates', []),
+        'devices' => [
+            'cameras' => eos_config('devices.cameras', []),
+            'gates' => eos_config('devices.gates', []),
+        ],
         'modules' => $modules,
         'controller' => $controller,
         'board' => [
@@ -1160,6 +1229,14 @@ function eos_telegram_process_update(array $update): array
 
     if ($lower === '/disk' || strpos($lower, 'disk') !== false) {
         $disk = eos_monitor_disk(true);
+        if (!($disk['ok'] ?? false)) {
+            eos_send_telegram(
+                eos_telegram_with_identity("📦 <b>Disk Report</b>\nStatus: <b>GAGAL DIBACA</b>\nDetail: " . eos_format_plain((string) ($disk['message'] ?? 'Unknown error'))),
+                [$chatId],
+                ['reply_to_message_id' => $replyMessageId]
+            );
+            return ['handled' => true, 'command' => 'disk'];
+        }
         eos_send_telegram(
             eos_telegram_with_identity("📦 <b>Disk Report</b>\nDrive: <b>{$disk['drive']}</b>\nFree: <b>{$disk['free_human']}</b> ({$disk['free_percent']}%)\nUsed: {$disk['used_human']} ({$disk['used_percent']}%)\nStatus: <b>" . strtoupper($disk['status']) . '</b>'),
             [$chatId],
@@ -1239,4 +1316,44 @@ function eos_telegram_process_update(array $update): array
 
     eos_send_telegram(eos_telegram_with_identity('Perintah tidak dikenali. Kirim /help untuk daftar perintah.'), [$chatId], ['reply_to_message_id' => $replyMessageId]);
     return ['handled' => true, 'command' => 'unknown'];
+}
+
+function eos_telegram_poll_once(): array
+{
+    $token = (string) eos_config('telegram.bot_token', '');
+    if ($token === '') {
+        return ['ok' => false, 'message' => 'Bot token belum diisi.'];
+    }
+
+    $stateFile = eos_config('telegram.poll_state_file');
+    $state = is_file($stateFile) ? (json_decode((string) file_get_contents($stateFile), true) ?: []) : [];
+    $offset = (int) ($state['offset'] ?? 0);
+
+    $query = 'https://api.telegram.org/bot' . $token . '/getUpdates?timeout=1&offset=' . $offset;
+    $raw = @file_get_contents($query);
+    $json = json_decode((string) $raw, true);
+
+    if (!is_array($json) || !($json['ok'] ?? false)) {
+        return ['ok' => false, 'message' => 'Gagal mengambil update Telegram.', 'raw' => $raw];
+    }
+
+    $handled = [];
+    $maxOffset = $offset;
+    foreach (($json['result'] ?? []) as $update) {
+        $handled[] = eos_telegram_process_update($update);
+        $maxOffset = max($maxOffset, ((int) ($update['update_id'] ?? 0)) + 1);
+    }
+
+    file_put_contents($stateFile, json_encode([
+        'offset' => $maxOffset,
+        'updated_at' => date('c'),
+    ], JSON_PRETTY_PRINT));
+
+    return [
+        'ok' => true,
+        'handled' => $handled,
+        'next_offset' => $maxOffset,
+        'count' => count($handled),
+        'updated_at' => date('c'),
+    ];
 }

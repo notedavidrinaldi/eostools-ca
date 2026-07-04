@@ -2,6 +2,8 @@ config.local.php
 storage/cache/*
 storage/state/*.json
 storage/logs/*.log
+storage/sessions/*
 !storage/cache/.gitkeep
 !storage/state/.gitkeep
 !storage/logs/.gitkeep
+!storage/sessions/.gitkeep

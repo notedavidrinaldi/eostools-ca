@@ -91,6 +91,11 @@ if (isset($_GET['api'])) {
             eos_log_event('TG', 'manual_test', 'INFO', [], (string) eos_current_user(), 'telegram');
             eos_json(['ok' => true, 'message' => 'Pesan test Telegram dikirim.']);
             break;
+
+        case 'telegram_poll':
+            $result = eos_telegram_poll_once();
+            eos_json($result, $result['ok'] ? 200 : 502);
+            break;
     }
 
     eos_json(['ok' => false, 'message' => 'API tidak ditemukan.'], 404);
@@ -324,6 +329,90 @@ $summary = eos_dashboard_summary();
             font-weight:700;
         }
         .content{position:relative;z-index:1;padding:24px}
+        .nav-shell{
+            display:grid;
+            grid-template-columns:240px 1fr;
+            gap:18px;
+            align-items:start;
+        }
+        .sidebar{
+            position:sticky;
+            top:18px;
+            border:1px solid var(--line);
+            border-radius:24px;
+            background:linear-gradient(180deg, rgba(10,24,32,.96), rgba(7,18,24,.95));
+            padding:16px;
+            box-shadow:var(--shadow);
+        }
+        .sidebar h3{
+            margin:0 0 12px;
+            font-size:14px;
+            color:#9fd8e7;
+            letter-spacing:.12em;
+            text-transform:uppercase;
+        }
+        .menu-list{
+            display:grid;
+            gap:10px;
+        }
+        .menu-link{
+            display:flex;
+            justify-content:space-between;
+            align-items:center;
+            gap:10px;
+            text-decoration:none;
+            color:#d5f2fb;
+            padding:12px 14px;
+            border-radius:16px;
+            border:1px solid #173846;
+            background:#06131a;
+            font-size:13px;
+        }
+        .menu-link:hover{
+            border-color:#25a7ff;
+            background:#091923;
+        }
+        .menu-link.active{
+            border-color:#27d3a2;
+            background:linear-gradient(135deg, rgba(39,211,162,.18), rgba(37,167,255,.14));
+            color:#ffffff;
+            box-shadow:inset 0 0 0 1px rgba(39,211,162,.12);
+        }
+        .menu-link span:last-child{
+            color:#7ec9da;
+            font-size:11px;
+        }
+        .main-panels{
+            display:grid;
+            gap:16px;
+        }
+        .top-menu{
+            display:flex;
+            flex-wrap:wrap;
+            gap:10px;
+            margin-bottom:16px;
+        }
+        .top-menu a{
+            text-decoration:none;
+            color:#cdeef7;
+            border:1px solid #173846;
+            background:#06131a;
+            border-radius:999px;
+            padding:9px 14px;
+            font-size:12px;
+        }
+        .top-menu a:hover{
+            border-color:#27d3a2;
+            color:#ffffff;
+        }
+        .top-menu a.active{
+            border-color:#27d3a2;
+            color:#ffffff;
+            background:linear-gradient(135deg, rgba(39,211,162,.18), rgba(37,167,255,.14));
+        }
+        .section-anchor{
+            scroll-margin-top:18px;
+        }
         .status-grid{
             display:grid;
             grid-template-columns:repeat(6, minmax(0,1fr));
@@ -549,15 +638,69 @@ $summary = eos_dashboard_summary();
             font-size:12px;
             line-height:1.6;
         }
+        .guide-grid{
+            display:grid;
+            grid-template-columns:repeat(2,minmax(0,1fr));
+            gap:12px;
+            margin-top:16px;
+        }
+        .guide-card{
+            border:1px solid var(--line);
+            border-radius:18px;
+            background:#06131a;
+            padding:16px;
+        }
+        .guide-card h4{
+            margin:0 0 10px;
+            color:var(--white);
+            font-size:15px;
+        }
+        .guide-card ul{
+            margin:0;
+            padding-left:18px;
+            color:#b8dce8;
+            font-size:13px;
+            line-height:1.7;
+        }
+        .guide-card li + li{margin-top:4px}
+        .table-wrap{
+            margin-top:16px;
+            border:1px solid var(--line);
+            border-radius:18px;
+            overflow:auto;
+            background:#06131a;
+        }
+        table.inventory{
+            width:100%;
+            border-collapse:collapse;
+            font-size:12px;
+            color:#c3e8f2;
+            min-width:760px;
+        }
+        table.inventory th,table.inventory td{
+            padding:10px 12px;
+            border-bottom:1px solid #123543;
+            text-align:left;
+            vertical-align:top;
+        }
+        table.inventory th{
+            background:#081821;
+            color:#8fd3e4;
+            text-transform:uppercase;
+            letter-spacing:.08em;
+            font-size:11px;
+        }
         code{color:#a7f3d0}
         @media (max-width: 1240px){
             .status-grid{grid-template-columns:repeat(3, minmax(0,1fr))}
             .board-grid,.log-grid{grid-template-columns:1fr}
+            .nav-shell{grid-template-columns:1fr}
+            .sidebar{position:static}
         }
         @media (max-width: 760px){
             .shell{padding:12px}
             .topbar,.content{padding:16px}
-            .status-grid,.top-meta,.telemetry,.gallery,.button-grid,.quick-switches,.network-grid{grid-template-columns:1fr}
+            .status-grid,.top-meta,.telemetry,.gallery,.button-grid,.quick-switches,.network-grid,.guide-grid{grid-template-columns:1fr}
             h1{font-size:30px}
         }
     </style>
@@ -613,39 +756,74 @@ $summary = eos_dashboard_summary();
                             <div class="k">Network Scan</div>
                             <div class="v" id="networkScanTime"><?= eos_h((string) ($summary['network']['updated_at'] ?? '-')) ?></div>
                         </div>
+                        <div class="meta-card">
+                            <div class="k">Telegram Poll</div>
+                            <div class="v" id="telegramPollState">IDLE</div>
+                        </div>
+                        <div class="meta-card">
+                            <div class="k">Telegram Poll Time</div>
+                            <div class="v" id="telegramPollTime">-</div>
+                        </div>
                     </div>
                     <a class="logout" href="?logout=1">POWER OFF</a>
                 </div>
             </section>
 
             <section class="content">
-                <div id="statusModules" class="status-grid">
-                    <?php foreach ($summary['modules'] as $module): ?>
-                        <article class="module-card">
-                            <div class="module-head">
-                                <div>
-                                    <div class="module-key"><?= eos_h($module['key']) ?></div>
-                                    <div class="module-label"><?= eos_h($module['label']) ?></div>
-                                </div>
-                                <div class="led" style="color:<?= eos_h($module['led']) ?>;background:<?= eos_h($module['led']) ?>"></div>
+                <div class="top-menu">
+                    <a class="nav-anchor" href="#overview" data-target="overview">Overview</a>
+                    <a class="nav-anchor" href="#control" data-target="control">Control</a>
+                    <a class="nav-anchor" href="#sensor" data-target="sensor">Sensor</a>
+                    <a class="nav-anchor" href="#terminal" data-target="terminal">Terminal</a>
+                    <a class="nav-anchor" href="#guide" data-target="guide">Panduan</a>
+                    <a class="nav-anchor" href="#inventory" data-target="inventory">Inventory</a>
+                    <a class="nav-anchor" href="#logs" data-target="logs">Logs</a>
+                </div>
+
+                <div class="nav-shell">
+                    <aside class="sidebar">
+                        <h3>Sub Menu</h3>
+                        <div class="menu-list">
+                            <a class="menu-link nav-anchor" href="#overview" data-target="overview"><span>Overview Board</span><span>01</span></a>
+                            <a class="menu-link nav-anchor" href="#control" data-target="control"><span>Switch Matrix</span><span>02</span></a>
+                            <a class="menu-link nav-anchor" href="#sensor" data-target="sensor"><span>Sensor Rack</span><span>03</span></a>
+                            <a class="menu-link nav-anchor" href="#terminal" data-target="terminal"><span>Serial Terminal</span><span>04</span></a>
+                            <a class="menu-link nav-anchor" href="#guide" data-target="guide"><span>Panduan Chat</span><span>05</span></a>
+                            <a class="menu-link nav-anchor" href="#inventory" data-target="inventory"><span>Inventori</span><span>06</span></a>
+                            <a class="menu-link nav-anchor" href="#logs" data-target="logs"><span>System Logs</span><span>07</span></a>
+                        </div>
+                    </aside>
+
+                    <div class="main-panels">
+                        <section id="overview" class="section-anchor">
+                            <div id="statusModules" class="status-grid">
+                                <?php foreach ($summary['modules'] as $module): ?>
+                                    <article class="module-card">
+                                        <div class="module-head">
+                                            <div>
+                                                <div class="module-key"><?= eos_h($module['key']) ?></div>
+                                                <div class="module-label"><?= eos_h($module['label']) ?></div>
+                                            </div>
+                                            <div class="led" style="color:<?= eos_h($module['led']) ?>;background:<?= eos_h($module['led']) ?>"></div>
+                                        </div>
+                                        <div class="module-desc"><?= eos_h($module['description']) ?></div>
+                                        <div class="module-meta"><?= eos_h($module['meta']) ?></div>
+                                    </article>
+                                <?php endforeach; ?>
                             </div>
-                            <div class="module-desc"><?= eos_h($module['description']) ?></div>
-                            <div class="module-meta"><?= eos_h($module['meta']) ?></div>
-                        </article>
-                    <?php endforeach; ?>
-                </div>
 
-                <div class="busbar">
-                    <div class="bus-pill">BUS STATE: <strong id="busStateBar"><?= eos_h($summary['board']['bus_state']) ?></strong></div>
-                    <div class="bus-pill">MODULES: <span id="moduleCount"><?= eos_h((string) $summary['board']['module_count']) ?></span></div>
-                    <div class="bus-pill">DRIVE SENSOR: <span id="diskHeadline"><?= eos_h(($summary['disk']['free_human'] ?? '-') . ' / ' . ($summary['disk']['free_percent'] ?? '-') . '%') ?></span></div>
-                    <div class="bus-pill">NET BUS: <span id="networkHeadline"><?= strtoupper(eos_h((string) ($summary['network']['overall'] ?? 'standby'))) ?></span></div>
-                    <div class="bus-pill">HOST: <span id="runtimeHost"><?= eos_h((string) $summary['runtime']['label']) ?> / <?= eos_h((string) $summary['runtime']['ip']) ?></span></div>
-                    <div class="bus-pill">SCAN LOOP: <?= eos_h($summary['board']['uptime_hint']) ?></div>
-                </div>
+                            <div class="busbar">
+                                <div class="bus-pill">BUS STATE: <strong id="busStateBar"><?= eos_h($summary['board']['bus_state']) ?></strong></div>
+                                <div class="bus-pill">MODULES: <span id="moduleCount"><?= eos_h((string) $summary['board']['module_count']) ?></span></div>
+                                <div class="bus-pill">DRIVE SENSOR: <span id="diskHeadline"><?= eos_h(($summary['disk']['free_human'] ?? '-') . ' / ' . ($summary['disk']['free_percent'] ?? '-') . '%') ?></span></div>
+                                <div class="bus-pill">NET BUS: <span id="networkHeadline"><?= strtoupper(eos_h((string) ($summary['network']['overall'] ?? 'standby'))) ?></span></div>
+                                <div class="bus-pill">HOST: <span id="runtimeHost"><?= eos_h((string) $summary['runtime']['label']) ?> / <?= eos_h((string) $summary['runtime']['ip']) ?></span></div>
+                                <div class="bus-pill">SCAN LOOP: <?= eos_h($summary['board']['uptime_hint']) ?></div>
+                            </div>
+                        </section>
 
-                <div class="board-grid">
-                    <section class="panel">
+                        <div class="board-grid">
+                    <section id="control" class="panel section-anchor">
                         <h2>Switch Matrix</h2>
                         <p>Panel eksekusi utama seperti saklar pada control board.</p>
                         <div class="field">
@@ -683,7 +861,7 @@ $summary = eos_dashboard_summary();
                         <div class="hint">Command Telegram aktif: <code>/disk</code>, <code>/network</code>, <code>/health</code>, <code>/restart POOL</code>, <code>/restart-group GROUP</code>, dan <code>/iis</code>. Bot juga akan membalas jika pesannya di-reply atau saat namanya disebut.</div>
                     </section>
 
-                    <section class="panel stack">
+                    <section id="sensor" class="panel stack section-anchor">
                         <div>
                             <h2>Sensor Rack</h2>
                             <p>Disk monitor, network bus, dan image fetch bekerja sebagai sensor/reader module.</p>
@@ -727,7 +905,7 @@ $summary = eos_dashboard_summary();
                         </div>
                     </section>
 
-                    <section class="panel">
+                    <section id="terminal" class="panel section-anchor">
                         <h2>Serial Terminal</h2>
                         <p>Output live seperti monitor serial untuk operator dengan format log yang lebih jelas.</p>
                         <div id="outputBox" class="terminal">Menunggu perintah...</div>
@@ -737,9 +915,132 @@ $summary = eos_dashboard_summary();
                         <div class="endpoint"><strong>Controller status</strong><br><code>controller.php?key=<?= eos_h(eos_config('telegram.webhook_key')) ?>&cmd=status</code></div>
                         <div class="endpoint"><strong>Controller arm/fire</strong><br><code>controller.php?key=<?= eos_h(eos_config('telegram.webhook_key')) ?>&cmd=arm</code><br><code>controller.php?key=<?= eos_h(eos_config('telegram.webhook_key')) ?>&cmd=fire&action=restart_pool&target=CGSIN</code></div>
                     </section>
+                        </div>
+
+                <div id="guide" class="log-grid section-anchor" style="margin-top:16px;">
+                    <section class="panel" style="grid-column:1 / -1;">
+                        <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap;">
+                            <div>
+                                <h3>Menu Panduan Chat</h3>
+                                <p>Panduan cepat agar operator tahu cara berbicara dengan bot di grup Telegram.</p>
+                            </div>
+                            <div class="bus-pill">PANGGIL BOT: `@boot` / `eos tools`</div>
+                        </div>
+                        <div class="guide-grid">
+                            <article class="guide-card">
+                                <h4>Command Resmi</h4>
+                                <ul>
+                                    <li><code>/help</code> untuk bantuan singkat.</li>
+                                    <li><code>/disk</code> untuk cek kapasitas drive C.</li>
+                                    <li><code>/network</code> untuk cek server, kamera, dan domain.</li>
+                                    <li><code>/health</code> untuk ringkasan status sistem.</li>
+                                    <li><code>/restart AMS</code> untuk restart app pool tertentu.</li>
+                                    <li><code>/restart-group CGSIN_STACK</code> untuk restart satu grup.</li>
+                                    <li><code>/iis</code> untuk restart IIS.</li>
+                                </ul>
+                            </article>
+                            <article class="guide-card">
+                                <h4>Contoh Chat Natural</h4>
+                                <ul>
+                                    <li><code>@boot disk tinggal berapa</code></li>
+                                    <li><code>@boot jaringan bagaimana</code></li>
+                                    <li><code>@boot status server bagaimana</code></li>
+                                    <li><code>@boot domain cusmod hidup tidak</code></li>
+                                    <li><code>@boot kamera online semua?</code></li>
+                                    <li><code>@boot tolong bantu cek disk</code></li>
+                                </ul>
+                            </article>
+                            <article class="guide-card">
+                                <h4>Cara Bot Merespons</h4>
+                                <ul>
+                                    <li>Bot menjawab jika di-mention, di-reply, atau dipanggil namanya.</li>
+                                    <li>Balasan bisa berisi status disk, jaringan, health, atau hasil restart.</li>
+                                    <li>Balasan interaktif menyertakan server/IP responder.</li>
+                                    <li>Polling Telegram berjalan tiap 1 menit selama dashboard terbuka.</li>
+                                </ul>
+                            </article>
+                            <article class="guide-card">
+                                <h4>Nama Yang Bisa Dipanggil</h4>
+                                <ul>
+                                    <li><code>@boot</code></li>
+                                    <li><code>boot</code></li>
+                                    <li><code>eos</code></li>
+                                    <li><code>eos tools</code></li>
+                                    <li><code>eostools</code></li>
+                                    <li><code>bot eos</code></li>
+                                </ul>
+                            </article>
+                        </div>
+                    </section>
                 </div>
 
-                <div class="log-grid">
+                <div id="inventory" class="log-grid section-anchor" style="margin-top:16px;">
+                    <section class="panel" style="grid-column:1 / -1;">
+                        <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap;">
+                            <div>
+                                <h3>Inventori Perangkat</h3>
+                                <p>Daftar camera, barrier, dan timbangan yang sudah terdaftar di sistem.</p>
+                            </div>
+                            <div class="bus-pill">LB SERVER: 172.27.0.36</div>
+                        </div>
+
+                        <div class="table-wrap">
+                            <table class="inventory">
+                                <thead>
+                                    <tr>
+                                        <th>Gate ID</th>
+                                        <th>Camera IP</th>
+                                        <th>Model</th>
+                                        <th>Auth Profile</th>
+                                        <th>Name</th>
+                                        <th>Action</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <?php foreach (($summary['devices']['cameras'] ?? []) as $camera): ?>
+                                        <tr>
+                                            <td><?= eos_h((string) $camera['gate_id']) ?></td>
+                                            <td><?= eos_h((string) $camera['ip']) ?></td>
+                                            <td><?= eos_h((string) $camera['model']) ?></td>
+                                            <td><?= eos_h((string) $camera['auth_profile']) ?></td>
+                                            <td><?= eos_h((string) $camera['name']) ?></td>
+                                            <td><?= eos_h((string) ($camera['action'] ?: '-')) ?></td>
+                                        </tr>
+                                    <?php endforeach; ?>
+                                </tbody>
+                            </table>
+                        </div>
+
+                        <div class="table-wrap">
+                            <table class="inventory">
+                                <thead>
+                                    <tr>
+                                        <th>ID</th>
+                                        <th>Gate Name</th>
+                                        <th>I/E</th>
+                                        <th>I/O</th>
+                                        <th>Barrier IP</th>
+                                        <th>Timbangan IP</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <?php foreach (($summary['devices']['gates'] ?? []) as $gate): ?>
+                                        <tr>
+                                            <td><?= eos_h((string) $gate['id']) ?></td>
+                                            <td><?= eos_h((string) $gate['gate_name']) ?></td>
+                                            <td><?= eos_h((string) $gate['zone']) ?></td>
+                                            <td><?= eos_h((string) $gate['io']) ?></td>
+                                            <td><?= eos_h((string) $gate['barrier_ip']) ?></td>
+                                            <td><?= eos_h((string) $gate['timbangan_ip']) ?></td>
+                                        </tr>
+                                    <?php endforeach; ?>
+                                </tbody>
+                            </table>
+                        </div>
+                    </section>
+                </div>
+
+                <div id="logs" class="log-grid section-anchor">
                     <section class="panel">
                         <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;">
                             <div>
@@ -777,6 +1078,8 @@ $summary = eos_dashboard_summary();
                         <div class="hint">Scheduler Windows cukup memanggil endpoint monitor dan poll secara periodik, sehingga board tetap ringan tanpa daemon panjang di PHP.</div>
                     </section>
                 </div>
+                    </div>
+                </div>
             </section>
         </div>
     </div>
@@ -813,6 +1116,38 @@ $summary = eos_dashboard_summary();
                     <div class="module-meta">${module.meta}</div>
                 </article>
             `).join('');
+        }
+
+        function setActiveNav(targetId) {
+            document.querySelectorAll('.nav-anchor').forEach((link) => {
+                link.classList.toggle('active', link.dataset.target === targetId);
+            });
+        }
+
+        function setupSectionNavigation() {
+            const sections = Array.from(document.querySelectorAll('.section-anchor'));
+            const observer = new IntersectionObserver((entries) => {
+                const visible = entries
+                    .filter((entry) => entry.isIntersecting)
+                    .sort((a, b) => b.intersectionRatio - a.intersectionRatio);
+                if (visible.length > 0) {
+                    setActiveNav(visible[0].target.id);
+                }
+            }, {
+                rootMargin: '-10% 0px -55% 0px',
+                threshold: [0.2, 0.4, 0.6]
+            });
+
+            sections.forEach((section) => observer.observe(section));
+
+            document.querySelectorAll('.nav-anchor').forEach((link) => {
+                link.addEventListener('click', () => {
+                    setActiveNav(link.dataset.target);
+                });
+            });
+
+            const initial = window.location.hash ? window.location.hash.slice(1) : 'overview';
+            setActiveNav(initial);
         }
 
         function getStateColor(status) {
@@ -915,6 +1250,19 @@ $summary = eos_dashboard_summary();
                 refreshLogs();
             } catch (error) {
                 setOutput('ERROR: ' + error.message);
+            }
+        }
+
+        async function pollTelegramSilently() {
+            try {
+                const result = await api('?api=telegram_poll');
+                document.getElementById('telegramPollState').textContent = result.count > 0 ? `RX ${result.count}` : 'LISTEN';
+                document.getElementById('telegramPollTime').textContent = result.updated_at || new Date().toISOString();
+                if (result.count > 0) {
+                    refreshLogs();
+                }
+            } catch (error) {
+                document.getElementById('telegramPollState').textContent = 'ERROR';
             }
         }
 
@@ -1038,10 +1386,13 @@ $summary = eos_dashboard_summary();
 
         checkDisk(false);
         scanNetwork(false);
+        pollTelegramSilently();
+        setupSectionNavigation();
         setInterval(refreshSummary, 1000);
         setInterval(refreshLogs, 10000);
         setInterval(() => checkDisk(false), 30000);
         setInterval(() => scanNetwork(false), 30000);
+        setInterval(pollTelegramSilently, 60000);
     </script>
 </body>
 </html>

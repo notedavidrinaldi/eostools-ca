@@ -24,4 +24,11 @@ return [
             '\\\\10.15.42.141\\autogate_ca_server\\AutogatePictures\\%gate%\\%date%\\',
         ],
     ],
+    'devices' => [
+        'auth_profiles' => [
+            'axis_root' => ['username' => 'root', 'password' => 'root'],
+            'sony_blank' => ['username' => '', 'password' => ''],
+            'hikvision_admin' => ['username' => 'admin', 'password' => 'Ipclogistic'],
+        ],
+    ],
 ];
