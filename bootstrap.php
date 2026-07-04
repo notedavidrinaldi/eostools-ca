@@ -896,12 +896,14 @@ function eos_dashboard_summary(): array
     $network = eos_network_cached_state();
     $modules = eos_controller_modules($disk, $network);
     $controller = eos_controller_state();
+    $runtime = eos_runtime_identity();
     return [
         'app_name' => eos_config('app_name'),
         'board_name' => 'EOS CONTROL BOARD',
         'board_mode' => 'MICROCONTROLLER',
         'server_time' => date('Y-m-d H:i:s'),
         'user' => eos_current_user(),
+        'runtime' => $runtime,
         'disk' => $disk,
         'network' => $network,
         'pools' => eos_config('iis.app_pools', []),

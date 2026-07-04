@@ -590,6 +590,14 @@ $summary = eos_dashboard_summary();
                             <div class="v" id="serverTime"><?= eos_h($summary['server_time']) ?></div>
                         </div>
                         <div class="meta-card">
+                            <div class="k">Server Label</div>
+                            <div class="v" id="runtimeLabel"><?= eos_h((string) $summary['runtime']['label']) ?></div>
+                        </div>
+                        <div class="meta-card">
+                            <div class="k">Server IP</div>
+                            <div class="v" id="runtimeIp"><?= eos_h((string) $summary['runtime']['ip']) ?></div>
+                        </div>
+                        <div class="meta-card">
                             <div class="k">Controller</div>
                             <div class="v" id="controllerState"><?= $summary['controller']['armed'] ? 'ARMED' : 'DISARMED' ?></div>
                         </div>
@@ -632,6 +640,7 @@ $summary = eos_dashboard_summary();
                     <div class="bus-pill">MODULES: <span id="moduleCount"><?= eos_h((string) $summary['board']['module_count']) ?></span></div>
                     <div class="bus-pill">DRIVE SENSOR: <span id="diskHeadline"><?= eos_h(($summary['disk']['free_human'] ?? '-') . ' / ' . ($summary['disk']['free_percent'] ?? '-') . '%') ?></span></div>
                     <div class="bus-pill">NET BUS: <span id="networkHeadline"><?= strtoupper(eos_h((string) ($summary['network']['overall'] ?? 'standby'))) ?></span></div>
+                    <div class="bus-pill">HOST: <span id="runtimeHost"><?= eos_h((string) $summary['runtime']['label']) ?> / <?= eos_h((string) $summary['runtime']['ip']) ?></span></div>
                     <div class="bus-pill">SCAN LOOP: <?= eos_h($summary['board']['uptime_hint']) ?></div>
                 </div>
 
@@ -1012,6 +1021,9 @@ $summary = eos_dashboard_summary();
                 document.getElementById('networkState').textContent = String(result.data.network.overall || 'standby').toUpperCase();
                 document.getElementById('networkHeadline').textContent = String(result.data.network.overall || 'standby').toUpperCase();
                 document.getElementById('networkScanTime').textContent = result.data.network.updated_at || '-';
+                document.getElementById('runtimeLabel').textContent = result.data.runtime.label || '-';
+                document.getElementById('runtimeIp').textContent = result.data.runtime.ip || '-';
+                document.getElementById('runtimeHost').textContent = `${result.data.runtime.label || '-'} / ${result.data.runtime.ip || '-'}`;
                 renderModules(result.data.modules);
             } catch (error) {
             }
