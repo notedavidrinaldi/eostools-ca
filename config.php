@@ -14,6 +14,7 @@ return [
         'webhook_key' => 'eos-tools-secure-key',
         'bot_name' => 'EOS Tools',
         'aliases' => ['eos', 'eos tools', 'eostools', 'bot eos'],
+        'include_responder_identity' => true,
     ],
     'disk' => [
         'drive' => 'C:',
@@ -119,5 +120,9 @@ return [
         'app_log' => __DIR__ . '/storage/logs/activity.log',
         'telegram_log' => __DIR__ . '/storage/logs/telegram.log',
         'network_log' => __DIR__ . '/storage/logs/network.log',
+    ],
+    'runtime' => [
+        'responder_label' => 'AUTO',
+        'responder_ip' => 'AUTO',
     ],
 ];

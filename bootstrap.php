@@ -216,6 +216,49 @@ function eos_send_telegram(string $message, ?array $chatIds = null, array $optio
     return ['ok' => true, 'results' => $results];
 }
 
+function eos_runtime_identity(): array
+{
+    $configuredLabel = (string) eos_config('runtime.responder_label', 'AUTO');
+    $configuredIp = (string) eos_config('runtime.responder_ip', 'AUTO');
+
+    $hostname = gethostname() ?: php_uname('n') ?: 'unknown-host';
+    $detectedIp = '';
+
+    if (!empty($_SERVER['SERVER_ADDR'])) {
+        $detectedIp = (string) $_SERVER['SERVER_ADDR'];
+    }
+    if ($detectedIp === '' && !empty($_SERVER['LOCAL_ADDR'])) {
+        $detectedIp = (string) $_SERVER['LOCAL_ADDR'];
+    }
+    if ($detectedIp === '' && $hostname !== '') {
+        $resolved = @gethostbyname($hostname);
+        if (is_string($resolved) && $resolved !== $hostname) {
+            $detectedIp = $resolved;
+        }
+    }
+    if ($detectedIp === '') {
+        $detectedIp = 'unknown-ip';
+    }
+
+    return [
+        'label' => $configuredLabel !== 'AUTO' ? $configuredLabel : $hostname,
+        'ip' => $configuredIp !== 'AUTO' ? $configuredIp : $detectedIp,
+        'hostname' => $hostname,
+    ];
+}
+
+function eos_telegram_with_identity(string $message): string
+{
+    if (!eos_config('telegram.include_responder_identity', true)) {
+        return $message;
+    }
+
+    $identity = eos_runtime_identity();
+    return rtrim($message) . "\n\n" .
+        "<i>Dibalas oleh program di:</i>\n" .
+        "<b>{$identity['label']}</b> / <code>{$identity['ip']}</code>";
+}
+
 function eos_telegram_display_name(array $message): string
 {
     $from = $message['from'] ?? [];
@@ -1106,7 +1149,7 @@ function eos_telegram_process_update(array $update): array
 
     if ($lower === '/start' || $lower === '/help') {
         eos_send_telegram(
-            "EOS Tools siap.\nPerintah:\n/disk\n/health\n/restart <POOL>\n/restart-group <GROUP>\n/iis",
+            eos_telegram_with_identity("EOS Tools siap.\nPerintah:\n/disk\n/network\n/health\n/restart <POOL>\n/restart-group <GROUP>\n/iis"),
             [$chatId],
             ['reply_to_message_id' => $replyMessageId]
         );
@@ -1116,7 +1159,7 @@ function eos_telegram_process_update(array $update): array
     if ($lower === '/disk' || strpos($lower, 'disk') !== false) {
         $disk = eos_monitor_disk(true);
         eos_send_telegram(
-            "📦 <b>Disk Report</b>\nDrive: <b>{$disk['drive']}</b>\nFree: <b>{$disk['free_human']}</b> ({$disk['free_percent']}%)\nUsed: {$disk['used_human']} ({$disk['used_percent']}%)\nStatus: <b>" . strtoupper($disk['status']) . '</b>',
+            eos_telegram_with_identity("📦 <b>Disk Report</b>\nDrive: <b>{$disk['drive']}</b>\nFree: <b>{$disk['free_human']}</b> ({$disk['free_percent']}%)\nUsed: {$disk['used_human']} ({$disk['used_percent']}%)\nStatus: <b>" . strtoupper($disk['status']) . '</b>'),
             [$chatId],
             ['reply_to_message_id' => $replyMessageId]
         );
@@ -1132,7 +1175,7 @@ function eos_telegram_process_update(array $update): array
             }
         }
         eos_send_telegram(
-            "🌐 <b>Network Report</b>\nStatus bus: <b>" . strtoupper((string) $network['overall']) . "</b>\nTarget online: <b>{$online}/" . count($network['targets'] ?? []) . "</b>",
+            eos_telegram_with_identity("🌐 <b>Network Report</b>\nStatus bus: <b>" . strtoupper((string) $network['overall']) . "</b>\nTarget online: <b>{$online}/" . count($network['targets'] ?? []) . "</b>"),
             [$chatId],
             ['reply_to_message_id' => $replyMessageId]
         );
@@ -1143,7 +1186,7 @@ function eos_telegram_process_update(array $update): array
         $summary = eos_dashboard_summary();
         $disk = $summary['disk'];
         eos_send_telegram(
-            "🩺 <b>EOS Tools Health</b>\nTime: {$summary['server_time']}\nDisk C Free: {$disk['free_human']} ({$disk['free_percent']}%)\nJumlah Pool: " . count($summary['pools']),
+            eos_telegram_with_identity("🩺 <b>EOS Tools Health</b>\nTime: {$summary['server_time']}\nDisk C Free: {$disk['free_human']} ({$disk['free_percent']}%)\nJumlah Pool: " . count($summary['pools'])),
             [$chatId],
             ['reply_to_message_id' => $replyMessageId]
         );
@@ -1153,7 +1196,7 @@ function eos_telegram_process_update(array $update): array
     if (preg_match('/^\/restart\s+([A-Za-z0-9]+)/', $text, $match)) {
         $result = eos_restart_app_pool($match[1], 'Dari Telegram', 'telegram');
         eos_send_telegram(
-            ($result['ok'] ? '✅' : '⚠️') . ' Restart pool ' . strtoupper($match[1]) . ': ' . $result['message'],
+            eos_telegram_with_identity(($result['ok'] ? '✅' : '⚠️') . ' Restart pool ' . strtoupper($match[1]) . ': ' . $result['message']),
             [$chatId],
             ['reply_to_message_id' => $replyMessageId]
         );
@@ -1163,7 +1206,7 @@ function eos_telegram_process_update(array $update): array
     if (preg_match('/^\/restart-group\s+([A-Za-z0-9_-]+)/', $text, $match)) {
         $result = eos_restart_group($match[1], 'Dari Telegram', 'telegram');
         eos_send_telegram(
-            ($result['ok'] ? '✅' : '⚠️') . ' Restart group ' . strtoupper($match[1]) . ': ' . $result['message'],
+            eos_telegram_with_identity(($result['ok'] ? '✅' : '⚠️') . ' Restart group ' . strtoupper($match[1]) . ': ' . $result['message']),
             [$chatId],
             ['reply_to_message_id' => $replyMessageId]
         );
@@ -1173,7 +1216,7 @@ function eos_telegram_process_update(array $update): array
     if ($lower === '/iis') {
         $result = eos_restart_iis('Perintah Telegram', 'telegram');
         eos_send_telegram(
-            ($result['ok'] ? '✅' : '⚠️') . ' Restart IIS: ' . $result['message'],
+            eos_telegram_with_identity(($result['ok'] ? '✅' : '⚠️') . ' Restart IIS: ' . $result['message']),
             [$chatId],
             ['reply_to_message_id' => $replyMessageId]
         );
@@ -1183,7 +1226,7 @@ function eos_telegram_process_update(array $update): array
     if (eos_telegram_is_addressed($text, $message)) {
         $reply = eos_telegram_human_reply($text, $message);
         if ($reply) {
-            eos_send_telegram($reply, [$chatId], ['reply_to_message_id' => $replyMessageId]);
+            eos_send_telegram(eos_telegram_with_identity($reply), [$chatId], ['reply_to_message_id' => $replyMessageId]);
             eos_log_event('TG', 'chat_reply', 'INFO', [
                 'chat_id' => $chatId,
                 'message' => $text,
@@ -1192,6 +1235,6 @@ function eos_telegram_process_update(array $update): array
         }
     }
 
-    eos_send_telegram('Perintah tidak dikenali. Kirim /help untuk daftar perintah.', [$chatId]);
+    eos_send_telegram(eos_telegram_with_identity('Perintah tidak dikenali. Kirim /help untuk daftar perintah.'), [$chatId], ['reply_to_message_id' => $replyMessageId]);
     return ['handled' => true, 'command' => 'unknown'];
 }

@@ -84,6 +84,13 @@ Bot juga bisa merespons lebih natural saat:
 - namanya disebut
 - diajak chat singkat seperti sapaan atau permintaan bantuan
 
+Setiap balasan interaktif Telegram juga bisa menyertakan identitas program yang menjawab, termasuk label server dan IP responder. Untuk hasil yang akurat di produksi, isi:
+
+- `runtime.responder_label`
+- `runtime.responder_ip`
+
+di `config.local.php`.
+
 ## Controller commands
 
 - `controller.php?key=...&cmd=status`

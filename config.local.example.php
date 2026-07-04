@@ -8,6 +8,11 @@ return [
         'bot_token' => 'ISI_BOT_TOKEN_ASLI',
         'chat_ids' => ['-1002149116231'],
         'webhook_key' => 'GANTI_DENGAN_KEY_PANJANG_DAN_UNIK',
+        'include_responder_identity' => true,
+    ],
+    'runtime' => [
+        'responder_label' => 'SERVER_CA_PRODUKSI',
+        'responder_ip' => '172.27.x.x',
     ],
     'disk' => [
         'drive' => 'C:',
