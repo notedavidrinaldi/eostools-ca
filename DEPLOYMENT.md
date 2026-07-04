@@ -64,6 +64,26 @@ Endpoint utama:
 - `/eos-tools/telegram_webhook.php?key=...`
 - `/eos-tools/controller.php?key=...&cmd=status`
 
+Checklist cepat setelah deploy:
+
+- login ke dashboard berhasil
+- tabel inventori menampilkan status `ONLINE/OFFLINE` untuk camera, barrier/adam, dan timbangan
+- `NET BUS` menampilkan jumlah target online yang sesuai
+- toggle `Run Mode` muncul di dashboard
+- mode `User` menjadi default
+- saat mode `User`, status Telegram poll menunjukkan `USER MODE`
+- saat mode `Server`, Telegram poll tetap berjalan tiap 1 menit
+- saat mode `Server`, bot tetap membalas dan kiriman Telegram tetap masuk
+
+Checklist chat bot:
+
+- `@boot ringkas status umum`
+- `@boot mana yang offline sekarang`
+- `@boot kamera online semua?`
+- `@boot barrier gate 03i online tidak`
+- `@boot adam gate 03i online tidak`
+- `@boot timbangan gate02o bagaimana`
+
 ## 6. Scheduler Windows
 
 Jalankan periodik lewat Task Scheduler:
@@ -77,6 +97,12 @@ Rekomendasi:
 
 - `monitor.php`: setiap 5 atau 15 menit
 - `telegram_poll.php`: setiap 1 menit
+
+Catatan mode dashboard:
+
+- browser operator biasa sebaiknya dibiarkan di mode `User`
+- browser khusus monitor server bisa di-set ke mode `Server`
+- mode `Server` cocok untuk mesin yang memang disiapkan menerima polling Telegram terus-menerus
 
 ## 7. Alur controller mode
 
