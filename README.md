@@ -1,5 +1,8 @@
 # EOS Tools
 
+[![PHP Lint](https://github.com/notedavidrinaldi/eostools-ca/actions/workflows/php-lint.yml/badge.svg)](https://github.com/notedavidrinaldi/eostools-ca/actions/workflows/php-lint.yml)
+[![Release Package](https://github.com/notedavidrinaldi/eostools-ca/actions/workflows/release.yml/badge.svg)](https://github.com/notedavidrinaldi/eostools-ca/actions/workflows/release.yml)
+
 Super app operasional untuk:
 
 - restart app pool IIS
@@ -21,12 +24,29 @@ Super app operasional untuk:
 Workflow GitHub Actions tersedia di:
 
 - `.github/workflows/php-lint.yml`
+- `.github/workflows/release.yml`
 
 Fungsinya:
 
 - lint semua file PHP saat `push` ke `main`
 - lint saat `pull_request`
 - cek file inti aplikasi tersedia
+- membuat GitHub Release dan file zip saat push tag `v*`
+
+## Release
+
+Untuk membuat release baru:
+
+```bash
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+Setelah itu GitHub Actions akan:
+
+- lint ulang file PHP
+- membuat archive `.zip`
+- publish GitHub Release otomatis
 
 ## Konfigurasi aman
 
