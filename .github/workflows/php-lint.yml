@@ -1,0 +1,47 @@
+name: PHP Lint
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.2"
+
+      - name: Show PHP version
+        run: php -v
+
+      - name: Lint PHP files
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t files < <(find . -type f -name "*.php" | sort)
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "No PHP files found."
+            exit 0
+          fi
+          for file in "${files[@]}"; do
+            echo "Linting $file"
+            php -l "$file"
+          done
+
+      - name: Verify required app files
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f index.php
+          test -f bootstrap.php
+          test -f config.php
+          test -f monitor.php
+          test -f controller.php

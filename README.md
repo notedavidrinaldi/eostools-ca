@@ -16,11 +16,27 @@ Super app operasional untuk:
 - Telegram webhook: `/eos-tools/telegram_webhook.php?key=...`
 - Controller relay: `/eos-tools/controller.php?key=...&cmd=status`
 
+## CI
+
+Workflow GitHub Actions tersedia di:
+
+- `.github/workflows/php-lint.yml`
+
+Fungsinya:
+
+- lint semua file PHP saat `push` ke `main`
+- lint saat `pull_request`
+- cek file inti aplikasi tersedia
+
 ## Konfigurasi aman
 
 1. Duplikat `config.local.example.php` menjadi `config.local.php`
 2. Isi token Telegram, chat id, password login, dan webhook key
 3. Jangan simpan token produksi di `config.php`
+
+Panduan deploy lengkap ada di:
+
+- `DEPLOYMENT.md`
 
 ## Rekomendasi scheduler Windows
 
