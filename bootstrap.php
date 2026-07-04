@@ -324,7 +324,7 @@ function eos_telegram_human_reply(string $text, array $message): ?string
     }
 
     if (preg_match('/\b(halo|hallo|hai|hello|pagi|siang|sore|malam)\b/u', $lower)) {
-        return "Halo {$name}, {$botName} siap bantu. Kalau mau cek cepat, coba ketik /health atau /disk.";
+        return "Halo {$name}, {$botName} siap bantu. Kalau mau, saya bisa ringkas status server, cek disk, atau cek perangkat yang offline.";
     }
 
     if (strpos($lower, 'terima kasih') !== false || strpos($lower, 'makasih') !== false || strpos($lower, 'thanks') !== false) {
@@ -336,18 +336,11 @@ function eos_telegram_human_reply(string $text, array $message): ?string
     }
 
     if (strpos($lower, 'status') !== false || strpos($lower, 'kondisi') !== false) {
-        $summary = eos_dashboard_summary();
-        $online = 0;
-        foreach (($summary['network']['targets'] ?? []) as $target) {
-            if (($target['status'] ?? '') === 'online') {
-                $online++;
-            }
-        }
-        return "Status singkat saat ini: bus {$summary['board']['bus_state']}, disk {$summary['disk']['status']}, network {$online}/" . count($summary['network']['targets'] ?? []) . " target online.";
+        return eos_telegram_overall_status_reply($name);
     }
 
     if (preg_match('/\b(tolong|bantu|cek)\b/u', $lower)) {
-        return "Siap {$name}. Saya bisa bantu cek /disk, /health, restart pool dengan /restart NAMA_POOL, atau restart group dengan /restart-group NAMA_GROUP.";
+        return "Siap {$name}. Saya bisa bantu cek status umum, perangkat offline, gate tertentu, /disk, /health, restart pool dengan /restart NAMA_POOL, atau restart group dengan /restart-group NAMA_GROUP.";
     }
 
     return "Saya tangkap pesan Anda, {$name}. Kalau ingin aksi cepat, sebut saja yang mau dicek atau pakai command seperti /disk, /health, /restart, atau /iis.";
@@ -358,6 +351,14 @@ function eos_telegram_smart_intent_reply(string $lower, string $name, string $bo
     $asksDisk = preg_match('/\b(disk|storage|penyimpanan|kapasitas|drive c|sisa disk|disk tinggal)\b/u', $lower) === 1;
     $asksNetwork = preg_match('/\b(jaringan|network|internet|server|ping|kamera|domain|host)\b/u', $lower) === 1;
     $asksHow = preg_match('/\b(bagaimana|gimana|berapa|sehat|aman|normal|status|kondisi|tinggal)\b/u', $lower) === 1;
+    $asksOnline = preg_match('/\b(online|offline|hidup|mati|putus|nyambung|terhubung)\b/u', $lower) === 1;
+    $asksProblem = preg_match('/\b(masalah|gangguan|kendala|error|bermasalah|offline semua|yang offline|mana yang offline|apa yang offline)\b/u', $lower) === 1;
+    $asksSummary = preg_match('/\b(ringkas|ringkasan|summary|singkat|overview|sekilas)\b/u', $lower) === 1;
+
+    $deviceReply = eos_telegram_device_status_reply($lower, $name);
+    if ($deviceReply !== null) {
+        return $deviceReply;
+    }
 
     if ($asksDisk) {
         $disk = eos_disk_space_report();
@@ -369,7 +370,15 @@ function eos_telegram_smart_intent_reply(string $lower, string $name, string $bo
             "Yang terpakai {$disk['used_human']} ({$disk['used_percent']}%). Statusnya " . strtoupper((string) $disk['status']) . '.';
     }
 
-    if ($asksNetwork || ($asksHow && preg_match('/\b(server|koneksi|domain|kamera)\b/u', $lower) === 1)) {
+    if ($asksSummary || ($asksHow && preg_match('/\b(umum|keseluruhan|overall|semua)\b/u', $lower) === 1)) {
+        return eos_telegram_overall_status_reply($name);
+    }
+
+    if ($asksProblem) {
+        return eos_telegram_problem_focus_reply($name);
+    }
+
+    if ($asksNetwork || $asksOnline || ($asksHow && preg_match('/\b(server|koneksi|domain|kamera|gate|barrier|adam|timbangan)\b/u', $lower) === 1)) {
         $network = eos_network_monitor(false);
         $targets = $network['targets'] ?? [];
         $online = 0;
@@ -387,15 +396,287 @@ function eos_telegram_smart_intent_reply(string $lower, string $name, string $bo
         }
 
         if (!$offlineNames) {
-            return "{$name}, jaringan terpantau bagus. Semua target online ({$online}/" . count($targets) . ").";
+            return "{$name}, jaringan terpantau bagus. Semua target online ({$online}/" . count($targets) . "). Tidak ada perangkat yang perlu dicek sekarang.";
         }
 
         $offlineText = implode(', ', array_slice($offlineNames, 0, 3));
         return "{$name}, kondisi jaringan saat ini " . strtoupper((string) $network['overall']) . ". " .
-            "Target online {$online}/" . count($targets) . ". Yang perlu dicek: {$offlineText}.";
+            "Target online {$online}/" . count($targets) . ". Yang perlu dicek: {$offlineText}. " . eos_telegram_network_follow_up($network);
     }
 
     return null;
+}
+
+function eos_telegram_device_status_reply(string $lower, string $name): ?string
+{
+    $gateId = eos_extract_gate_id($lower);
+    $network = eos_network_monitor(false);
+    $targets = $network['targets'] ?? [];
+    $specificTargetReply = eos_telegram_specific_target_reply($lower, $name, $targets);
+    if ($specificTargetReply !== null) {
+        return $specificTargetReply;
+    }
+
+    if ($gateId !== null) {
+        $matches = array_values(array_filter($targets, static function ($target) use ($gateId) {
+            return stripos((string) ($target['gate_id'] ?? ''), $gateId) !== false;
+        }));
+
+        if (!$matches) {
+            return "{$name}, saya belum menemukan perangkat yang terdaftar untuk {$gateId}.";
+        }
+
+        $requestedType = eos_extract_device_type($lower);
+        if ($requestedType !== null) {
+            $matches = array_values(array_filter($matches, static function ($target) use ($requestedType) {
+                return ($target['device_type'] ?? null) === $requestedType;
+            }));
+            if (!$matches) {
+                return "{$name}, " . eos_device_type_label($requestedType) . " untuk {$gateId} belum terdaftar di inventori.";
+            }
+        }
+
+        $online = count(array_filter($matches, static fn($target) => ($target['status'] ?? '') === 'online'));
+        $offline = array_values(array_filter($matches, static fn($target) => ($target['status'] ?? '') !== 'online'));
+        $details = implode('; ', array_map(static function ($target) {
+            return eos_telegram_target_status_snippet($target);
+        }, array_slice($matches, 0, 4)));
+
+        if (!$offline) {
+            return "{$name}, semua perangkat {$gateId} terpantau online ({$online}/" . count($matches) . "). {$details}.";
+        }
+
+        return "{$name}, perangkat {$gateId} yang online {$online}/" . count($matches) . ". Detail: {$details}.";
+    }
+
+    $type = eos_extract_device_type($lower);
+    if ($type === null) {
+        return null;
+    }
+
+    $matches = array_values(array_filter($targets, static function ($target) use ($type) {
+        return ($target['device_type'] ?? null) === $type;
+    }));
+
+    if (!$matches) {
+        return null;
+    }
+
+    $online = count(array_filter($matches, static fn($target) => ($target['status'] ?? '') === 'online'));
+    $offline = array_values(array_filter($matches, static fn($target) => ($target['status'] ?? '') !== 'online'));
+    if (!$offline) {
+        return "{$name}, status " . eos_device_type_label($type) . " saat ini bagus. Semua online ({$online}/" . count($matches) . ").";
+    }
+
+    $details = implode('; ', array_map(static function ($target) {
+        return eos_telegram_target_status_snippet($target);
+    }, array_slice($offline, 0, 4)));
+    return "{$name}, status " . eos_device_type_label($type) . " saat ini {$online}/" . count($matches) . " online. Yang sedang offline: {$details}.";
+}
+
+function eos_extract_gate_id(string $text): ?string
+{
+    if (preg_match('/\b(gate\s*0?([1-9]|1[0-9]))\s*([io])\b/i', $text, $match)) {
+        return 'GATE' . str_pad($match[2], 2, '0', STR_PAD_LEFT) . strtoupper($match[3]);
+    }
+    if (preg_match('/\b(gate0?[0-9]{1,2}[io])\b/i', $text, $match)) {
+        return strtoupper(str_replace(' ', '', $match[1]));
+    }
+    return null;
+}
+
+function eos_extract_device_type(string $text): ?string
+{
+    if (preg_match('/\b(camera|kamera)\b/u', $text) === 1) {
+        return 'camera';
+    }
+    if (preg_match('/\b(barrier|adam)\b/u', $text) === 1) {
+        return 'barrier';
+    }
+    if (preg_match('/\b(timbangan)\b/u', $text) === 1) {
+        return 'timbangan';
+    }
+    return null;
+}
+
+function eos_device_type_label(string $type): string
+{
+    switch (strtolower($type)) {
+        case 'camera':
+            return 'camera';
+        case 'barrier':
+            return 'barrier/adam';
+        case 'timbangan':
+            return 'timbangan';
+        default:
+            return $type;
+    }
+}
+
+function eos_telegram_specific_target_reply(string $lower, string $name, array $targets): ?string
+{
+    $bestScore = 0;
+    $matches = [];
+
+    foreach ($targets as $target) {
+        $score = eos_match_network_target_score($lower, $target);
+        if ($score <= 0) {
+            continue;
+        }
+        if ($score > $bestScore) {
+            $bestScore = $score;
+            $matches = [$target];
+            continue;
+        }
+        if ($score === $bestScore) {
+            $matches[] = $target;
+        }
+    }
+
+    if ($bestScore < 3 || !$matches) {
+        return null;
+    }
+
+    if (count($matches) === 1) {
+        $target = $matches[0];
+        $statusText = eos_status_label((string) ($target['status'] ?? 'unknown'));
+        $detail = (string) ($target['detail'] ?? '-');
+        $latency = (string) ($target['latency'] ?? '-');
+        return "{$name}, {$target['label']} saat ini {$statusText}. Endpoint {$target['endpoint']}. Latency {$latency}. Detail {$detail}.";
+    }
+
+    $details = implode('; ', array_map(static function ($target) {
+        return eos_telegram_target_status_snippet($target);
+    }, array_slice($matches, 0, 4)));
+    return "{$name}, saya temukan beberapa target terkait. {$details}.";
+}
+
+function eos_match_network_target_score(string $lower, array $target): int
+{
+    $score = 0;
+    $label = strtolower((string) ($target['label'] ?? ''));
+    $endpoint = strtolower((string) ($target['endpoint'] ?? ''));
+    $gateId = strtolower((string) ($target['gate_id'] ?? ''));
+
+    if ($gateId !== '' && strpos($lower, strtolower(str_replace(' ', '', $gateId))) !== false) {
+        $score += 4;
+    }
+
+    if ($endpoint !== '' && strpos($lower, $endpoint) !== false) {
+        $score += 5;
+    }
+
+    if ($label !== '' && strpos($lower, $label) !== false) {
+        $score += 5;
+    }
+
+    foreach (eos_network_target_terms($target) as $term) {
+        if ($term !== '' && strpos($lower, $term) !== false) {
+            $score += 3;
+        }
+    }
+
+    return $score;
+}
+
+function eos_network_target_terms(array $target): array
+{
+    $terms = [];
+    $label = strtolower((string) ($target['label'] ?? ''));
+    $endpoint = strtolower((string) ($target['endpoint'] ?? ''));
+
+    if ($endpoint !== '') {
+        $terms[] = $endpoint;
+        $host = parse_url($endpoint, PHP_URL_HOST);
+        if (is_string($host) && $host !== '') {
+            $terms[] = strtolower($host);
+            $parts = preg_split('/[^a-z0-9]+/', strtolower($host)) ?: [];
+            foreach ($parts as $part) {
+                if (strlen($part) >= 4) {
+                    $terms[] = $part;
+                }
+            }
+        }
+    }
+
+    $parts = preg_split('/[^a-z0-9]+/', $label) ?: [];
+    foreach ($parts as $part) {
+        if (strlen($part) >= 4 && !in_array($part, ['server', 'camera', 'barrier', 'adam', 'domain'], true)) {
+            $terms[] = $part;
+        }
+    }
+
+    return array_values(array_unique(array_filter($terms)));
+}
+
+function eos_telegram_target_status_snippet(array $target): string
+{
+    $status = eos_status_label((string) ($target['status'] ?? 'unknown'));
+    $latency = (string) ($target['latency'] ?? '-');
+    return "{$target['label']} {$status} ({$latency})";
+}
+
+function eos_telegram_overall_status_reply(string $name): string
+{
+    $summary = eos_dashboard_summary();
+    $network = $summary['network'] ?? ['targets' => [], 'overall' => 'standby'];
+    $targets = $network['targets'] ?? [];
+    $online = count(array_filter($targets, static fn($target) => ($target['status'] ?? '') === 'online'));
+    $offline = array_values(array_filter($targets, static fn($target) => ($target['status'] ?? '') !== 'online'));
+    $diskStatus = strtoupper((string) ($summary['disk']['status'] ?? 'unknown'));
+    $busState = (string) ($summary['board']['bus_state'] ?? 'UNKNOWN');
+
+    if (!$offline) {
+        return "{$name}, status umum saat ini bagus. Bus {$busState}, disk {$diskStatus}, dan network {$online}/" . count($targets) . " target online.";
+    }
+
+    $details = implode('; ', array_map(static function ($target) {
+        return eos_telegram_target_status_snippet($target);
+    }, array_slice($offline, 0, 3)));
+    return "{$name}, status umum saat ini perlu perhatian. Bus {$busState}, disk {$diskStatus}, network {$online}/" . count($targets) . " target online. Yang sedang bermasalah: {$details}.";
+}
+
+function eos_telegram_problem_focus_reply(string $name): string
+{
+    $network = eos_network_monitor(false);
+    $offline = array_values(array_filter(($network['targets'] ?? []), static fn($target) => ($target['status'] ?? '') !== 'online'));
+
+    if (!$offline) {
+        return "{$name}, saat ini tidak ada target yang terpantau offline. Semua perangkat dan host yang dimonitor sedang online.";
+    }
+
+    $details = implode('; ', array_map(static function ($target) {
+        return eos_telegram_target_status_snippet($target);
+    }, array_slice($offline, 0, 5)));
+    return "{$name}, yang sedang perlu dicek: {$details}. " . eos_telegram_network_follow_up($network);
+}
+
+function eos_telegram_network_follow_up(array $network): string
+{
+    $overall = strtolower((string) ($network['overall'] ?? 'standby'));
+    if ($overall === 'fault') {
+        return 'Saran saya cek endpoint tersebut lebih dulu dari sisi ping, power, atau koneksi LAN.';
+    }
+    if ($overall === 'warning') {
+        return 'Masih ada respons, tetapi ada indikasi warning yang sebaiknya dipantau.';
+    }
+    return 'Kondisi umum terlihat stabil.';
+}
+
+function eos_status_label(string $status): string
+{
+    switch (strtolower($status)) {
+        case 'online':
+        case 'ready':
+            return 'online';
+        case 'offline':
+        case 'fault':
+            return 'offline';
+        case 'warning':
+            return 'warning';
+        default:
+            return 'unknown';
+    }
 }
 
 function eos_run_powershell(string $script): array
@@ -763,7 +1044,7 @@ function eos_network_http_target(string $url, int $timeoutSeconds): array
 
 function eos_network_monitor(bool $forceLog = false): array
 {
-    $targets = eos_config('network.targets', []);
+    $targets = eos_network_targets();
     $timeout = (int) eos_config('network.timeout_seconds', 2);
     $previousState = eos_network_cached_state();
     $previousTargets = [];
@@ -854,6 +1135,55 @@ function eos_network_monitor(bool $forceLog = false): array
 
     file_put_contents(eos_config('network.state_file'), json_encode($payload, JSON_PRETTY_PRINT));
     return $payload;
+}
+
+function eos_network_targets(): array
+{
+    $targets = eos_config('network.targets', []);
+
+    foreach ((array) eos_config('devices.cameras', []) as $camera) {
+        $targets[] = [
+            'key' => 'camera_' . strtolower((string) $camera['gate_id']) . '_' . preg_replace('/[^0-9]/', '_', (string) $camera['ip']) . '_' . strtolower((string) $camera['name']),
+            'label' => (string) $camera['gate_id'] . ' Camera ' . (string) $camera['name'],
+            'type' => 'ping',
+            'host' => (string) $camera['ip'],
+            'gate_id' => (string) $camera['gate_id'],
+            'device_type' => 'camera',
+            'inventory_group' => 'camera',
+        ];
+    }
+
+    foreach ((array) eos_config('devices.gates', []) as $gate) {
+        $targets[] = [
+            'key' => 'barrier_' . strtolower((string) $gate['id']),
+            'label' => (string) $gate['id'] . ' Barrier',
+            'type' => 'ping',
+            'host' => (string) $gate['barrier_ip'],
+            'gate_id' => (string) $gate['id'],
+            'device_type' => 'barrier',
+            'inventory_group' => 'gate',
+        ];
+        $targets[] = [
+            'key' => 'timbangan_' . strtolower((string) $gate['id']),
+            'label' => (string) $gate['id'] . ' Timbangan',
+            'type' => 'ping',
+            'host' => (string) $gate['timbangan_ip'],
+            'gate_id' => (string) $gate['id'],
+            'device_type' => 'timbangan',
+            'inventory_group' => 'gate',
+        ];
+    }
+
+    return $targets;
+}
+
+function eos_network_targets_by_key(array $networkState): array
+{
+    $map = [];
+    foreach (($networkState['targets'] ?? []) as $target) {
+        $map[$target['key']] = $target;
+    }
+    return $map;
 }
 
 function eos_find_backup_images(string $gate, string $dateTimeInput): array
@@ -962,6 +1292,22 @@ function eos_dashboard_summary(): array
     $modules = eos_controller_modules($disk, $network);
     $controller = eos_controller_state();
     $runtime = eos_runtime_identity();
+    $networkMap = eos_network_targets_by_key($network);
+    $cameras = array_map(static function ($camera) use ($networkMap) {
+        $key = 'camera_' . strtolower((string) $camera['gate_id']) . '_' . preg_replace('/[^0-9]/', '_', (string) $camera['ip']) . '_' . strtolower((string) $camera['name']);
+        $camera['status'] = $networkMap[$key]['status'] ?? 'unknown';
+        $camera['latency'] = $networkMap[$key]['latency'] ?? null;
+        return $camera;
+    }, (array) eos_config('devices.cameras', []));
+    $gates = array_map(static function ($gate) use ($networkMap) {
+        $barrierKey = 'barrier_' . strtolower((string) $gate['id']);
+        $timbanganKey = 'timbangan_' . strtolower((string) $gate['id']);
+        $gate['barrier_status'] = $networkMap[$barrierKey]['status'] ?? 'unknown';
+        $gate['barrier_latency'] = $networkMap[$barrierKey]['latency'] ?? null;
+        $gate['timbangan_status'] = $networkMap[$timbanganKey]['status'] ?? 'unknown';
+        $gate['timbangan_latency'] = $networkMap[$timbanganKey]['latency'] ?? null;
+        return $gate;
+    }, (array) eos_config('devices.gates', []));
     return [
         'app_name' => eos_config('app_name'),
         'board_name' => 'EOS CONTROL BOARD',
@@ -975,8 +1321,8 @@ function eos_dashboard_summary(): array
         'groups' => array_keys(eos_config('iis.restart_groups', [])),
         'gates' => eos_config('images.gates', []),
         'devices' => [
-            'cameras' => eos_config('devices.cameras', []),
-            'gates' => eos_config('devices.gates', []),
+            'cameras' => $cameras,
+            'gates' => $gates,
         ],
         'modules' => $modules,
         'controller' => $controller,
@@ -1057,7 +1403,7 @@ function eos_controller_modules(?array $disk = null, ?array $network = null): ar
                 ? '#27d3a2'
                 : (($network['overall'] ?? 'standby') === 'warning' ? '#f6c14b' : (($network['overall'] ?? 'standby') === 'fault' ? '#ff6b6b' : '#eab308')),
             'description' => 'Cek reachability server, kamera, dan domain operasional.',
-            'meta' => $networkOnline . '/' . count(eos_config('network.targets', [])) . ' target online',
+            'meta' => $networkOnline . '/' . count(eos_network_targets()) . ' target online',
         ],
     ];
 }
@@ -1248,13 +1594,19 @@ function eos_telegram_process_update(array $update): array
     if ($lower === '/network' || $lower === '/net') {
         $network = eos_network_monitor(true);
         $online = 0;
+        $offlineTargets = [];
         foreach (($network['targets'] ?? []) as $target) {
             if (($target['status'] ?? '') === 'online') {
                 $online++;
+            } else {
+                $offlineTargets[] = eos_telegram_target_status_snippet($target);
             }
         }
+        $detail = $offlineTargets
+            ? "\nPerlu dicek: " . eos_format_plain(implode('; ', array_slice($offlineTargets, 0, 4)))
+            : "\nSemua target terpantau online.";
         eos_send_telegram(
-            eos_telegram_with_identity("🌐 <b>Network Report</b>\nStatus bus: <b>" . strtoupper((string) $network['overall']) . "</b>\nTarget online: <b>{$online}/" . count($network['targets'] ?? []) . "</b>"),
+            eos_telegram_with_identity("🌐 <b>Network Report</b>\nStatus bus: <b>" . strtoupper((string) $network['overall']) . "</b>\nTarget online: <b>{$online}/" . count($network['targets'] ?? []) . "</b>{$detail}"),
             [$chatId],
             ['reply_to_message_id' => $replyMessageId]
         );

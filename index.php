@@ -328,6 +328,81 @@ $summary = eos_dashboard_summary();
             border-radius:14px;
             font-weight:700;
         }
+        .runtime-stack{
+            display:flex;
+            flex-direction:column;
+            gap:12px;
+            align-items:stretch;
+            min-width:min(100%, 360px);
+        }
+        .mode-card{
+            border:1px solid var(--line);
+            border-radius:20px;
+            background:rgba(11,28,37,.92);
+            padding:14px 16px;
+        }
+        .mode-card-head{
+            display:flex;
+            justify-content:space-between;
+            gap:12px;
+            align-items:center;
+            flex-wrap:wrap;
+        }
+        .mode-card-head strong{
+            color:var(--white);
+            letter-spacing:.08em;
+            font-size:13px;
+            text-transform:uppercase;
+        }
+        .mode-card p{
+            margin:10px 0 0;
+            color:#9ec7d4;
+            font-size:12px;
+            line-height:1.6;
+        }
+        .toggle-row{
+            display:inline-flex;
+            gap:8px;
+            padding:6px;
+            border-radius:999px;
+            border:1px solid #173846;
+            background:#06131a;
+        }
+        .toggle-btn{
+            border:none;
+            border-radius:999px;
+            padding:10px 14px;
+            background:transparent;
+            color:#9ec7d4;
+            font:700 12px Consolas, Monaco, monospace;
+            letter-spacing:.08em;
+            text-transform:uppercase;
+            cursor:pointer;
+        }
+        .toggle-btn.active{
+            color:#041016;
+            background:linear-gradient(135deg, #27d3a2, #25a7ff);
+            box-shadow:0 10px 24px rgba(37,167,255,.2);
+        }
+        .toggle-status{
+            display:flex;
+            gap:8px;
+            flex-wrap:wrap;
+            margin-top:12px;
+        }
+        .toggle-pill{
+            display:inline-flex;
+            align-items:center;
+            gap:8px;
+            padding:7px 12px;
+            border-radius:999px;
+            border:1px solid #173846;
+            background:#06131a;
+            color:#bde8f3;
+            font-size:11px;
+            text-transform:uppercase;
+            letter-spacing:.08em;
+        }
         .content{position:relative;z-index:1;padding:24px}
         .nav-shell{
             display:grid;
@@ -690,6 +765,37 @@ $summary = eos_dashboard_summary();
             letter-spacing:.08em;
             font-size:11px;
         }
+        .inventory-status{
+            display:inline-flex;
+            align-items:center;
+            gap:8px;
+            padding:5px 10px;
+            border-radius:999px;
+            border:1px solid #17404f;
+            background:#08161d;
+            font-size:11px;
+            text-transform:uppercase;
+            letter-spacing:.08em;
+            white-space:nowrap;
+        }
+        .inventory-status::before{
+            content:'';
+            width:8px;
+            height:8px;
+            border-radius:50%;
+            background:currentColor;
+            box-shadow:0 0 10px currentColor;
+        }
+        .inventory-status.online{color:#27d3a2;border-color:#175544}
+        .inventory-status.offline{color:#ff7b7b;border-color:#6a2a2a}
+        .inventory-status.warning,
+        .inventory-status.unknown{color:#f6c14b;border-color:#6c5721}
+        .inventory-meta{
+            display:block;
+            margin-top:4px;
+            color:#8dbdca;
+            font-size:11px;
+        }
         code{color:#a7f3d0}
         @media (max-width: 1240px){
             .status-grid{grid-template-columns:repeat(3, minmax(0,1fr))}
@@ -765,7 +871,24 @@ $summary = eos_dashboard_summary();
                             <div class="v" id="telegramPollTime">-</div>
                         </div>
                     </div>
-                    <a class="logout" href="?logout=1">POWER OFF</a>
+                    <div class="runtime-stack">
+                        <div class="mode-card">
+                            <div class="mode-card-head">
+                                <strong>Run Mode</strong>
+                                <div class="toggle-row">
+                                    <button type="button" class="toggle-btn active" id="modeUserBtn" onclick="setDashboardMode('user')">User</button>
+                                    <button type="button" class="toggle-btn" id="modeServerBtn" onclick="setDashboardMode('server')">Server</button>
+                                </div>
+                            </div>
+                            <div class="toggle-status">
+                                <span class="toggle-pill">Mode: <strong id="dashboardModeLabel">USER</strong></span>
+                                <span class="toggle-pill">Auto Poll: <strong id="autoPollLabel">OFF</strong></span>
+                                <span class="toggle-pill">Auto Logout: <strong id="autoLogoutLabel">ON</strong></span>
+                            </div>
+                            <p id="dashboardModeHint">Mode user: polling Telegram per 1 menit dimatikan agar browser operator tidak ikut memproses kiriman bot.</p>
+                        </div>
+                        <a class="logout" href="?logout=1">POWER OFF</a>
+                    </div>
                 </div>
             </section>
 
@@ -947,6 +1070,11 @@ $summary = eos_dashboard_summary();
                                     <li><code>@boot status server bagaimana</code></li>
                                     <li><code>@boot domain cusmod hidup tidak</code></li>
                                     <li><code>@boot kamera online semua?</code></li>
+                                    <li><code>@boot mana yang offline sekarang</code></li>
+                                    <li><code>@boot ringkas status umum</code></li>
+                                    <li><code>@boot barrier gate 03i online tidak</code></li>
+                                    <li><code>@boot adam gate 03i online tidak</code></li>
+                                    <li><code>@boot timbangan gate02o bagaimana</code></li>
                                     <li><code>@boot tolong bantu cek disk</code></li>
                                 </ul>
                             </article>
@@ -990,6 +1118,7 @@ $summary = eos_dashboard_summary();
                                     <tr>
                                         <th>Gate ID</th>
                                         <th>Camera IP</th>
+                                        <th>Status</th>
                                         <th>Model</th>
                                         <th>Auth Profile</th>
                                         <th>Name</th>
@@ -1001,6 +1130,12 @@ $summary = eos_dashboard_summary();
                                         <tr>
                                             <td><?= eos_h((string) $camera['gate_id']) ?></td>
                                             <td><?= eos_h((string) $camera['ip']) ?></td>
+                                            <td>
+                                                <span class="inventory-status <?= eos_h((string) ($camera['status'] ?? 'unknown')) ?>">
+                                                    <?= strtoupper(eos_h((string) ($camera['status'] ?? 'unknown'))) ?>
+                                                </span>
+                                                <span class="inventory-meta">Latency: <?= eos_h((string) ($camera['latency'] ?? '-')) ?></span>
+                                            </td>
                                             <td><?= eos_h((string) $camera['model']) ?></td>
                                             <td><?= eos_h((string) $camera['auth_profile']) ?></td>
                                             <td><?= eos_h((string) $camera['name']) ?></td>
@@ -1020,7 +1155,9 @@ $summary = eos_dashboard_summary();
                                         <th>I/E</th>
                                         <th>I/O</th>
                                         <th>Barrier IP</th>
+                                        <th>Barrier Status</th>
                                         <th>Timbangan IP</th>
+                                        <th>Timbangan Status</th>
                                     </tr>
                                 </thead>
                                 <tbody>
@@ -1031,7 +1168,19 @@ $summary = eos_dashboard_summary();
                                             <td><?= eos_h((string) $gate['zone']) ?></td>
                                             <td><?= eos_h((string) $gate['io']) ?></td>
                                             <td><?= eos_h((string) $gate['barrier_ip']) ?></td>
+                                            <td>
+                                                <span class="inventory-status <?= eos_h((string) ($gate['barrier_status'] ?? 'unknown')) ?>">
+                                                    <?= strtoupper(eos_h((string) ($gate['barrier_status'] ?? 'unknown'))) ?>
+                                                </span>
+                                                <span class="inventory-meta">Latency: <?= eos_h((string) ($gate['barrier_latency'] ?? '-')) ?></span>
+                                            </td>
                                             <td><?= eos_h((string) $gate['timbangan_ip']) ?></td>
+                                            <td>
+                                                <span class="inventory-status <?= eos_h((string) ($gate['timbangan_status'] ?? 'unknown')) ?>">
+                                                    <?= strtoupper(eos_h((string) ($gate['timbangan_status'] ?? 'unknown'))) ?>
+                                                </span>
+                                                <span class="inventory-meta">Latency: <?= eos_h((string) ($gate['timbangan_latency'] ?? '-')) ?></span>
+                                            </td>
                                         </tr>
                                     <?php endforeach; ?>
                                 </tbody>
@@ -1254,6 +1403,10 @@ $summary = eos_dashboard_summary();
         }
 
         async function pollTelegramSilently() {
+            if (!isServerMode()) {
+                document.getElementById('telegramPollState').textContent = 'USER MODE';
+                return;
+            }
             try {
                 const result = await api('?api=telegram_poll');
                 document.getElementById('telegramPollState').textContent = result.count > 0 ? `RX ${result.count}` : 'LISTEN';
@@ -1384,15 +1537,105 @@ $summary = eos_dashboard_summary();
             refreshSummary();
         }
 
+        const DASHBOARD_MODE_KEY = 'eos_tools_dashboard_mode';
+        const USER_IDLE_TIMEOUT_MS = 15 * 60 * 1000;
+        let currentDashboardMode = 'user';
+        let telegramPollIntervalId = null;
+        let userLogoutTimerId = null;
+
+        function isServerMode() {
+            return currentDashboardMode === 'server';
+        }
+
+        function loadDashboardMode() {
+            const savedMode = window.localStorage.getItem(DASHBOARD_MODE_KEY);
+            return savedMode === 'server' ? 'server' : 'user';
+        }
+
+        function setDashboardMode(mode) {
+            currentDashboardMode = mode === 'server' ? 'server' : 'user';
+            window.localStorage.setItem(DASHBOARD_MODE_KEY, currentDashboardMode);
+            updateDashboardModeUI();
+            configureTelegramPolling();
+            configureAutoLogout();
+            setOutput(
+                currentDashboardMode === 'server'
+                    ? 'Mode SERVER aktif. Poll Telegram per 1 menit berjalan terus dan auto logout dimatikan.'
+                    : 'Mode USER aktif. Poll Telegram per 1 menit dimatikan dan auto logout idle diaktifkan.'
+            );
+        }
+
+        function updateDashboardModeUI() {
+            const isServer = isServerMode();
+            document.getElementById('dashboardModeLabel').textContent = isServer ? 'SERVER' : 'USER';
+            document.getElementById('autoPollLabel').textContent = isServer ? 'ON' : 'OFF';
+            document.getElementById('autoLogoutLabel').textContent = isServer ? 'OFF' : 'ON';
+            document.getElementById('dashboardModeHint').textContent = isServer
+                ? 'Mode server: polling Telegram per 1 menit tetap aktif agar kiriman dan respons bot terus diproses.'
+                : 'Mode user: polling Telegram per 1 menit dimatikan agar browser operator tidak ikut memproses kiriman bot.';
+            document.getElementById('modeUserBtn').classList.toggle('active', !isServer);
+            document.getElementById('modeServerBtn').classList.toggle('active', isServer);
+            if (!isServer) {
+                document.getElementById('telegramPollState').textContent = 'USER MODE';
+            }
+        }
+
+        function configureTelegramPolling() {
+            if (telegramPollIntervalId) {
+                clearInterval(telegramPollIntervalId);
+                telegramPollIntervalId = null;
+            }
+            if (isServerMode()) {
+                pollTelegramSilently();
+                telegramPollIntervalId = setInterval(pollTelegramSilently, 60000);
+            } else {
+                document.getElementById('telegramPollState').textContent = 'USER MODE';
+            }
+        }
+
+        function performAutoLogout() {
+            setOutput('Idle timeout tercapai. Dashboard logout otomatis karena mode USER aktif.');
+            window.location.href = '?logout=1';
+        }
+
+        function resetUserLogoutTimer() {
+            if (isServerMode()) {
+                return;
+            }
+            if (userLogoutTimerId) {
+                clearTimeout(userLogoutTimerId);
+            }
+            userLogoutTimerId = setTimeout(performAutoLogout, USER_IDLE_TIMEOUT_MS);
+        }
+
+        function configureAutoLogout() {
+            if (userLogoutTimerId) {
+                clearTimeout(userLogoutTimerId);
+                userLogoutTimerId = null;
+            }
+            if (!isServerMode()) {
+                resetUserLogoutTimer();
+            }
+        }
+
+        function bindUserActivityListeners() {
+            ['click', 'keydown', 'mousemove', 'scroll', 'touchstart'].forEach((eventName) => {
+                window.addEventListener(eventName, resetUserLogoutTimer, {passive: true});
+            });
+        }
+
         checkDisk(false);
         scanNetwork(false);
-        pollTelegramSilently();
         setupSectionNavigation();
+        currentDashboardMode = loadDashboardMode();
+        updateDashboardModeUI();
+        configureTelegramPolling();
+        configureAutoLogout();
+        bindUserActivityListeners();
         setInterval(refreshSummary, 1000);
         setInterval(refreshLogs, 10000);
         setInterval(() => checkDisk(false), 30000);
         setInterval(() => scanNetwork(false), 30000);
-        setInterval(pollTelegramSilently, 60000);
     </script>
 </body>
 </html>

@@ -78,13 +78,37 @@ curl "http://localhost/eos-tools/telegram_poll.php?key=GANTI_KEY"
 - `/restart-group CGSIN_STACK`
 - `/iis`
 
+## Dashboard Run Mode
+
+Dashboard punya toggle mode:
+
+- `User` sebagai default
+- `Server` untuk browser yang memang dibiarkan standby memproses polling bot
+
+Perilakunya:
+
+- mode `User`: polling Telegram otomatis per 1 menit dimatikan
+- mode `User`: auto logout idle aktif
+- mode `Server`: polling Telegram otomatis per 1 menit tetap aktif
+- mode `Server`: auto logout dimatikan
+
 Bot juga bisa merespons lebih natural saat:
 
 - pesannya di-reply
 - namanya disebut
 - diajak chat singkat seperti sapaan atau permintaan bantuan
+- ditanya status online/offline perangkat inventori seperti camera, barrier/adam, timbangan, gate tertentu, domain, atau server tertentu
+- diminta ringkasan status umum atau daftar target yang sedang bermasalah
 
 Setiap balasan interaktif Telegram juga bisa menyertakan identitas program yang menjawab, termasuk label server dan IP responder. Untuk hasil yang akurat di produksi, isi:
+
+Contoh chat natural:
+
+- `@boot mana yang offline sekarang`
+- `@boot ringkas status umum`
+- `@boot barrier gate 03i online tidak`
+- `@boot adam gate 03i online tidak`
+- `@boot timbangan gate02o bagaimana`
 
 - `runtime.responder_label`
 - `runtime.responder_ip`
@@ -126,6 +150,8 @@ Jika salah satu target berubah status:
 - `offline -> online`
 
 maka sistem akan kirim notifikasi perubahan ke Telegram dan mencatatnya di `network.log`.
+
+Inventori perangkat juga ikut masuk ke monitor jaringan, sehingga status camera, barrier/adam, dan timbangan muncul di dashboard dan ikut terbaca oleh bot Telegram.
 
 ## Catatan migrasi
 
