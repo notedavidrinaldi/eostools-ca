@@ -74,9 +74,66 @@ curl "http://localhost/eos-tools/telegram_poll.php?key=GANTI_KEY"
 - `/disk`
 - `/network`
 - `/health`
+- `/ticket kendala...`
+- `/ticket SITE | kendala...`
+- `/tickets`
+- `/ticket-report YYYY-MM`
+- `/ticket-day`
+- `/ticket-day YYYY-MM-DD`
 - `/restart AMS`
 - `/restart-group CGSIN_STACK`
 - `/iis`
+
+## Panduan Cek Via Telegram
+
+Urutan cek yang disarankan untuk operator:
+
+1. cek status umum
+2. cek apakah ada perangkat yang offline
+3. jika ada masalah, lanjut cek per gate atau per perangkat
+
+Contoh langkah pakai:
+
+- `@Pak_Lurah_Dapit_bot ringkas status umum`
+- `@Pak_Lurah_Dapit_bot mana yang offline sekarang`
+- `@Pak_Lurah_Dapit_bot kamera online semua?`
+- `@Pak_Lurah_Dapit_bot barrier gate 03i online tidak`
+- `@Pak_Lurah_Dapit_bot adam gate 03i online tidak`
+- `@Pak_Lurah_Dapit_bot timbangan gate02o bagaimana`
+- `@Pak_Lurah_Dapit_bot domain cusmod hidup tidak`
+- `/network`
+- `/disk`
+- `/health`
+- `/ticket GATE03I | barrier tidak respon`
+- `/ticket-day`
+- `/ticket-day 2026-07-08`
+- `reply ke balasan tiket: on proses`
+- `reply ke balasan tiket: done barrier normal kembali`
+
+Catatan akses Telegram:
+
+- semua user bisa membuat tiket dan memproses tiket via Telegram
+- setelah tiket dibuat, bot akan membalas dengan ringkasan dan nomor tiket
+- balas pesan bot tersebut dengan `on proses` untuk memulai penanganan
+- balas lagi dengan `done catatan...` untuk menutup tiket
+- saat tiket ditutup, bot akan mengirim ringkasan selesai dan lama penanganan
+- command `/ticket-day` akan menampilkan jumlah open/on check/done serta ringkasan tiket harian beserta waktu penanganannya
+- untuk user role `eos`, site tetap mengikuti site akun yang dikunci
+
+Arti cepat respons bot:
+
+- jika bot menjawab semua `online`, berarti target yang dimonitor sedang normal
+- jika bot menyebut nama perangkat/gate, fokus pengecekan diarahkan ke item tersebut
+- jika bot memberi status `fault` atau `offline`, cek ping, power, kabel LAN, atau koneksi perangkat
+- jika bot memberi status `warning`, perangkat masih merespons tetapi perlu dipantau
+
+Pola tanya yang paling berguna:
+
+- cek umum: `@Pak_Lurah_Dapit_bot ringkas status umum`
+- cek gangguan: `@Pak_Lurah_Dapit_bot mana yang offline sekarang`
+- cek gate: `@Pak_Lurah_Dapit_bot gate 03i bagaimana`
+- cek perangkat gate: `@Pak_Lurah_Dapit_bot adam gate 03i online tidak`
+- cek jenis perangkat: `@Pak_Lurah_Dapit_bot kamera online semua?`
 
 ## Dashboard Run Mode
 

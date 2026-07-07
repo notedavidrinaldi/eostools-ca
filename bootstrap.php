@@ -14,6 +14,10 @@ eos_prepare_session_storage($eosConfig);
 session_name('EOSTOOLSSESSID');
 session_start();
 
+$eosActingUser = null;
+$eosActingRole = null;
+$eosActingSite = null;
+
 eos_ensure_runtime();
 
 function eos_prepare_session_storage(array $config): void
@@ -72,11 +76,325 @@ function eos_ensure_runtime(): void
             @file_put_contents($file, '');
         }
     }
+
+    foreach ([eos_config('paths.ticket_log'), eos_config('paths.user_store')] as $file) {
+        if ($file && !is_file($file)) {
+            @file_put_contents($file, '');
+        }
+    }
+
+    eos_ensure_user_store();
+}
+
+function eos_ensure_user_store(): void
+{
+    $file = (string) eos_config('paths.user_store', '');
+    if ($file === '') {
+        return;
+    }
+
+    $users = eos_read_user_store();
+    if ($users !== []) {
+        return;
+    }
+
+    $defaults = [];
+    foreach ((array) eos_config('users', []) as $username => $value) {
+        if (is_array($value)) {
+            $password = (string) ($value['password'] ?? '');
+            $role = (string) ($value['role'] ?? ($username === 'halotec' ? 'admin' : 'eos'));
+            $site = (string) ($value['site'] ?? 'SERVER');
+        } else {
+            $password = (string) $value;
+            $role = $username === 'halotec' ? 'admin' : 'eos';
+            $site = 'SERVER';
+        }
+
+        $defaults[] = eos_normalize_user_record([
+            'username' => $username,
+            'password' => $password,
+            'role' => $role,
+            'site' => $site,
+            'active' => true,
+            'created_at' => date('c'),
+            'updated_at' => date('c'),
+        ]);
+    }
+
+    if ($defaults === []) {
+        $defaults[] = eos_normalize_user_record([
+            'username' => 'halotec',
+            'password' => 'halotec',
+            'role' => 'admin',
+            'site' => 'SERVER',
+            'active' => true,
+            'created_at' => date('c'),
+            'updated_at' => date('c'),
+        ]);
+    }
+
+    eos_write_user_store($defaults);
+}
+
+function eos_read_user_store(): array
+{
+    $file = (string) eos_config('paths.user_store', '');
+    if ($file === '' || !is_file($file)) {
+        return [];
+    }
+
+    $raw = trim((string) @file_get_contents($file));
+    if ($raw === '') {
+        return [];
+    }
+
+    $decoded = json_decode($raw, true);
+    return is_array($decoded) ? $decoded : [];
+}
+
+function eos_write_user_store(array $users): void
+{
+    $file = (string) eos_config('paths.user_store', '');
+    if ($file === '') {
+        return;
+    }
+
+    @file_put_contents($file, json_encode(array_values($users), JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+}
+
+function eos_normalize_user_record(array $user): array
+{
+    $password = (string) ($user['password'] ?? '');
+    if ($password !== '' && password_get_info($password)['algo'] === null) {
+        $password = password_hash($password, PASSWORD_DEFAULT);
+    }
+
+    return [
+        'username' => trim((string) ($user['username'] ?? '')),
+        'password' => $password,
+        'role' => strtolower((string) ($user['role'] ?? 'eos')) === 'admin' ? 'admin' : 'eos',
+        'site' => strtoupper(trim((string) ($user['site'] ?? 'SERVER'))),
+        'active' => array_key_exists('active', $user) ? (bool) $user['active'] : true,
+        'created_at' => (string) ($user['created_at'] ?? date('c')),
+        'updated_at' => (string) ($user['updated_at'] ?? date('c')),
+    ];
+}
+
+function eos_users(): array
+{
+    $users = [];
+    foreach (eos_read_user_store() as $user) {
+        if (!is_array($user)) {
+            continue;
+        }
+        $normalized = eos_normalize_user_record($user);
+        if ($normalized['username'] !== '') {
+            $users[$normalized['username']] = $normalized;
+        }
+    }
+    return $users;
+}
+
+function eos_save_users(array $users): void
+{
+    $normalized = [];
+    foreach ($users as $user) {
+        if (!is_array($user)) {
+            continue;
+        }
+        $row = eos_normalize_user_record($user);
+        if ($row['username'] !== '') {
+            $normalized[] = $row;
+        }
+    }
+    eos_write_user_store($normalized);
+}
+
+function eos_user_public_record(array $user): array
+{
+    return [
+        'username' => (string) ($user['username'] ?? ''),
+        'role' => (string) ($user['role'] ?? 'eos'),
+        'site' => (string) ($user['site'] ?? 'SERVER'),
+        'active' => (bool) ($user['active'] ?? true),
+        'created_at' => (string) ($user['created_at'] ?? ''),
+        'updated_at' => (string) ($user['updated_at'] ?? ''),
+    ];
+}
+
+function eos_user_list_public(): array
+{
+    return array_values(array_map('eos_user_public_record', eos_users()));
+}
+
+function eos_create_user(string $username, string $password, string $role, string $site): array
+{
+    eos_require_admin();
+    $username = trim($username);
+    if ($username === '' || $password === '') {
+        return ['ok' => false, 'message' => 'Username dan password wajib diisi.'];
+    }
+
+    $users = eos_users();
+    if (isset($users[$username])) {
+        return ['ok' => false, 'message' => 'Username sudah ada.'];
+    }
+
+    $site = eos_resolve_requested_site($site);
+    if (!in_array($site, eos_ticket_sites(), true)) {
+        return ['ok' => false, 'message' => 'Site tidak valid.'];
+    }
+
+    $users[$username] = eos_normalize_user_record([
+        'username' => $username,
+        'password' => $password,
+        'role' => $role,
+        'site' => $site,
+        'active' => true,
+        'created_at' => date('c'),
+        'updated_at' => date('c'),
+    ]);
+    eos_save_users($users);
+    eos_log_event('AUTH', 'user_created', 'INFO', ['username' => $username, 'role' => $role, 'site' => $site]);
+    return ['ok' => true, 'message' => 'User berhasil dibuat.'];
+}
+
+function eos_update_user(string $username, string $role, string $site, string $password = '', ?bool $active = null): array
+{
+    eos_require_admin();
+    $users = eos_users();
+    if (!isset($users[$username])) {
+        return ['ok' => false, 'message' => 'User tidak ditemukan.'];
+    }
+
+    $site = eos_resolve_requested_site($site);
+    if (!in_array($site, eos_ticket_sites(), true)) {
+        return ['ok' => false, 'message' => 'Site tidak valid.'];
+    }
+
+    $user = $users[$username];
+    $user['role'] = strtolower($role) === 'admin' ? 'admin' : 'eos';
+    $user['site'] = $site;
+    if ($password !== '') {
+        $user['password'] = $password;
+    }
+    if ($active !== null) {
+        $user['active'] = $active;
+    }
+    $user['updated_at'] = date('c');
+
+    $users[$username] = eos_normalize_user_record($user);
+    eos_save_users($users);
+    eos_log_event('AUTH', 'user_updated', 'INFO', ['username' => $username, 'role' => $user['role'], 'site' => $site]);
+    return ['ok' => true, 'message' => 'User berhasil diperbarui.'];
+}
+
+function eos_delete_user(string $username): array
+{
+    eos_require_admin();
+    $users = eos_users();
+    if (!isset($users[$username])) {
+        return ['ok' => false, 'message' => 'User tidak ditemukan.'];
+    }
+    if ($username === (eos_current_user() ?: '')) {
+        return ['ok' => false, 'message' => 'User login aktif tidak bisa dihapus.'];
+    }
+
+    $adminCount = count(array_filter($users, static fn($user) => ($user['role'] ?? '') === 'admin'));
+    if (($users[$username]['role'] ?? '') === 'admin' && $adminCount <= 1) {
+        return ['ok' => false, 'message' => 'Admin terakhir tidak boleh dihapus.'];
+    }
+
+    unset($users[$username]);
+    eos_save_users($users);
+    eos_log_event('AUTH', 'user_deleted', 'INFO', ['username' => $username]);
+    return ['ok' => true, 'message' => 'User berhasil dihapus.'];
+}
+
+function eos_ticket_sites(): array
+{
+    $sites = [];
+    foreach ((array) eos_config('sites.options', []) as $site) {
+        $site = strtoupper(trim((string) $site));
+        if ($site !== '') {
+            $sites[$site] = $site;
+        }
+    }
+
+    foreach ((array) eos_config('devices.gates', []) as $gate) {
+        $site = strtoupper(trim((string) ($gate['id'] ?? '')));
+        if ($site !== '') {
+            $sites[$site] = $site;
+        }
+    }
+
+    if ($sites === []) {
+        $sites['SERVER'] = 'SERVER';
+    }
+
+    ksort($sites);
+    return array_values($sites);
 }
 
 function eos_current_user(): ?string
 {
+    global $eosActingUser;
+    if (is_string($eosActingUser) && $eosActingUser !== '') {
+        return $eosActingUser;
+    }
     return $_SESSION[eos_config('session_key')] ?? null;
+}
+
+function eos_current_user_record(): ?array
+{
+    $username = eos_current_user();
+    if ($username === null) {
+        return null;
+    }
+
+    $users = eos_users();
+    return $users[$username] ?? null;
+}
+
+function eos_current_user_role(): ?string
+{
+    global $eosActingRole;
+    if (is_string($eosActingRole) && $eosActingRole !== '') {
+        return $eosActingRole;
+    }
+    $user = eos_current_user_record();
+    return $user['role'] ?? null;
+}
+
+function eos_current_user_site(): ?string
+{
+    global $eosActingSite;
+    if (is_string($eosActingSite) && $eosActingSite !== '') {
+        return $eosActingSite;
+    }
+    $user = eos_current_user_record();
+    return $user['site'] ?? null;
+}
+
+function eos_begin_impersonation(string $username, string $role, string $site): void
+{
+    global $eosActingUser, $eosActingRole, $eosActingSite;
+    $eosActingUser = $username;
+    $eosActingRole = strtolower($role) === 'admin' ? 'admin' : 'eos';
+    $eosActingSite = strtoupper(trim($site)) !== '' ? strtoupper(trim($site)) : 'SERVER';
+}
+
+function eos_end_impersonation(): void
+{
+    global $eosActingUser, $eosActingRole, $eosActingSite;
+    $eosActingUser = null;
+    $eosActingRole = null;
+    $eosActingSite = null;
+}
+
+function eos_is_admin(): bool
+{
+    return eos_current_user_role() === 'admin';
 }
 
 function eos_require_login(): void
@@ -86,17 +404,53 @@ function eos_require_login(): void
     }
 }
 
+function eos_require_admin(): void
+{
+    eos_require_login();
+    if (!eos_is_admin()) {
+        eos_json(['ok' => false, 'message' => 'Hanya admin yang boleh mengakses fitur ini.'], 403);
+    }
+}
+
+function eos_user_can_access_site(string $site): bool
+{
+    $site = strtoupper(trim($site));
+    if ($site === '') {
+        return false;
+    }
+    if (eos_is_admin()) {
+        return true;
+    }
+    return strtoupper((string) eos_current_user_site()) === $site;
+}
+
+function eos_resolve_requested_site(?string $site = null): string
+{
+    if (!eos_is_admin()) {
+        return strtoupper((string) eos_current_user_site());
+    }
+
+    $site = strtoupper(trim((string) $site));
+    if ($site === '') {
+        return 'SERVER';
+    }
+    return $site;
+}
+
 function eos_login(string $username, string $password): bool
 {
-    $users = eos_config('users', []);
+    $users = eos_users();
     if (!array_key_exists($username, $users)) {
         return false;
     }
 
-    $expected = (string) $users[$username];
-    $valid = password_get_info($expected)['algo'] !== null
-        ? password_verify($password, $expected)
-        : hash_equals($expected, $password);
+    $user = $users[$username];
+    if (!($user['active'] ?? true)) {
+        return false;
+    }
+
+    $expected = (string) ($user['password'] ?? '');
+    $valid = $expected !== '' && password_verify($password, $expected);
 
     if ($valid) {
         $_SESSION[eos_config('session_key')] = $username;
@@ -159,6 +513,513 @@ function eos_log_event(string $module, string $event, string $level = 'INFO', ar
     }
 
     eos_log($message, $type, $actor);
+}
+
+function eos_ticket_log_path(): string
+{
+    return (string) eos_config('paths.ticket_log');
+}
+
+function eos_ticket_append_event(string $event, array $payload): void
+{
+    $row = [
+        'ts' => date('c'),
+        'event' => $event,
+        'actor' => eos_current_user() ?: 'system',
+        'payload' => $payload,
+    ];
+    @file_put_contents(eos_ticket_log_path(), json_encode($row, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . "\n", FILE_APPEND);
+}
+
+function eos_generate_ticket_id(): string
+{
+    return 'TCK-' . date('Ymd-His') . '-' . strtoupper(substr(md5((string) microtime(true)), 0, 4));
+}
+
+function eos_ticket_records(): array
+{
+    $file = eos_ticket_log_path();
+    if (!is_file($file)) {
+        return [];
+    }
+
+    $tickets = [];
+    $lines = file($file, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [];
+    foreach ($lines as $line) {
+        $entry = json_decode($line, true);
+        if (!is_array($entry) || !is_array($entry['payload'] ?? null)) {
+            continue;
+        }
+
+        $payload = $entry['payload'];
+        $ticketId = (string) ($payload['ticket_id'] ?? '');
+        if ($ticketId === '') {
+            continue;
+        }
+
+        if (($entry['event'] ?? '') === 'ticket_created') {
+            $tickets[$ticketId] = [
+                'ticket_id' => $ticketId,
+                'created_at' => (string) ($payload['created_at'] ?? ($entry['ts'] ?? date('c'))),
+                'issue_time' => (string) ($payload['issue_time'] ?? ''),
+                'site' => strtoupper((string) ($payload['site'] ?? 'SERVER')),
+                'issue' => (string) ($payload['issue'] ?? ''),
+                'status' => 'open',
+                'created_by' => (string) ($payload['created_by'] ?? ($entry['actor'] ?? 'system')),
+                'checked_at' => null,
+                'checked_by' => null,
+                'done_at' => null,
+                'done_by' => null,
+                'note' => '',
+            ];
+            continue;
+        }
+
+        if (!isset($tickets[$ticketId])) {
+            continue;
+        }
+
+        if (($entry['event'] ?? '') === 'ticket_on_check') {
+            $tickets[$ticketId]['status'] = 'on_check';
+            $tickets[$ticketId]['checked_at'] = (string) ($payload['checked_at'] ?? ($entry['ts'] ?? date('c')));
+            $tickets[$ticketId]['checked_by'] = (string) ($payload['checked_by'] ?? ($entry['actor'] ?? 'system'));
+        }
+
+        if (($entry['event'] ?? '') === 'ticket_done') {
+            $tickets[$ticketId]['status'] = 'done';
+            $tickets[$ticketId]['done_at'] = (string) ($payload['done_at'] ?? ($entry['ts'] ?? date('c')));
+            $tickets[$ticketId]['done_by'] = (string) ($payload['done_by'] ?? ($entry['actor'] ?? 'system'));
+            $tickets[$ticketId]['note'] = (string) ($payload['note'] ?? '');
+        }
+    }
+
+    foreach ($tickets as &$ticket) {
+        $ticket['repair_minutes'] = eos_ticket_repair_minutes($ticket);
+    }
+    unset($ticket);
+
+    uasort($tickets, static function ($a, $b) {
+        return strcmp((string) ($b['created_at'] ?? ''), (string) ($a['created_at'] ?? ''));
+    });
+
+    return array_values($tickets);
+}
+
+function eos_ticket_repair_minutes(array $ticket): ?int
+{
+    $start = (string) ($ticket['checked_at'] ?: $ticket['created_at'] ?? '');
+    $end = (string) ($ticket['done_at'] ?? '');
+    if ($start === '' || $end === '') {
+        return null;
+    }
+
+    try {
+        $startAt = new DateTime($start);
+        $endAt = new DateTime($end);
+    } catch (Exception $e) {
+        return null;
+    }
+
+    return max(0, (int) floor(($endAt->getTimestamp() - $startAt->getTimestamp()) / 60));
+}
+
+function eos_ticket_duration_label(?int $minutes): string
+{
+    if ($minutes === null) {
+        return '-';
+    }
+    if ($minutes < 60) {
+        return $minutes . ' menit';
+    }
+    $hours = floor($minutes / 60);
+    $rest = $minutes % 60;
+    return $hours . ' jam' . ($rest > 0 ? ' ' . $rest . ' menit' : '');
+}
+
+function eos_visible_tickets(): array
+{
+    $tickets = eos_ticket_records();
+    if (eos_is_admin()) {
+        return $tickets;
+    }
+
+    $site = strtoupper((string) eos_current_user_site());
+    return array_values(array_filter($tickets, static function ($ticket) use ($site) {
+        return strtoupper((string) ($ticket['site'] ?? '')) === $site;
+    }));
+}
+
+function eos_find_ticket(string $ticketId): ?array
+{
+    foreach (eos_ticket_records() as $ticket) {
+        if (($ticket['ticket_id'] ?? '') === $ticketId) {
+            return $ticket;
+        }
+    }
+    return null;
+}
+
+function eos_create_ticket(string $issueTime, string $site, string $issue): array
+{
+    $issue = trim($issue);
+    if ($issue === '') {
+        return ['ok' => false, 'message' => 'Kendala wajib diisi.'];
+    }
+
+    $site = eos_resolve_requested_site($site);
+    if (!in_array($site, eos_ticket_sites(), true)) {
+        return ['ok' => false, 'message' => 'Site tidak valid.'];
+    }
+
+    $ticketId = eos_generate_ticket_id();
+    $createdAt = date('c');
+    eos_ticket_append_event('ticket_created', [
+        'ticket_id' => $ticketId,
+        'created_at' => $createdAt,
+        'issue_time' => trim($issueTime) !== '' ? trim($issueTime) : date('Y-m-d H:i:s'),
+        'site' => $site,
+        'issue' => $issue,
+        'created_by' => eos_current_user() ?: 'system',
+    ]);
+
+    eos_log_event('TICKET', 'ticket_created', 'INFO', [
+        'ticket_id' => $ticketId,
+        'site' => $site,
+        'issue' => $issue,
+    ]);
+
+    return ['ok' => true, 'message' => 'Tiket berhasil dibuat.', 'ticket_id' => $ticketId];
+}
+
+function eos_mark_ticket_on_check(string $ticketId): array
+{
+    eos_require_admin();
+    return eos_mark_ticket_on_check_by_actor($ticketId);
+}
+
+function eos_mark_ticket_on_check_by_actor(string $ticketId): array
+{
+    $ticket = eos_find_ticket($ticketId);
+    if ($ticket === null) {
+        return ['ok' => false, 'message' => 'Tiket tidak ditemukan.'];
+    }
+    if (($ticket['status'] ?? '') !== 'open') {
+        return ['ok' => false, 'message' => 'Hanya tiket OPEN yang bisa diubah ke ON CHECK.'];
+    }
+
+    eos_ticket_append_event('ticket_on_check', [
+        'ticket_id' => $ticketId,
+        'checked_at' => date('c'),
+        'checked_by' => eos_current_user() ?: 'system',
+    ]);
+    eos_log_event('TICKET', 'ticket_on_check', 'INFO', ['ticket_id' => $ticketId]);
+    return ['ok' => true, 'message' => 'Tiket masuk status ON CHECK.'];
+}
+
+function eos_mark_ticket_done(string $ticketId, string $note): array
+{
+    eos_require_admin();
+    return eos_mark_ticket_done_by_actor($ticketId, $note);
+}
+
+function eos_mark_ticket_done_by_actor(string $ticketId, string $note): array
+{
+    $ticket = eos_find_ticket($ticketId);
+    if ($ticket === null) {
+        return ['ok' => false, 'message' => 'Tiket tidak ditemukan.'];
+    }
+    if (($ticket['status'] ?? '') === 'done') {
+        return ['ok' => false, 'message' => 'Tiket sudah DONE.'];
+    }
+
+    eos_ticket_append_event('ticket_done', [
+        'ticket_id' => $ticketId,
+        'done_at' => date('c'),
+        'done_by' => eos_current_user() ?: 'system',
+        'note' => trim($note),
+    ]);
+    eos_log_event('TICKET', 'ticket_done', 'INFO', ['ticket_id' => $ticketId, 'note' => trim($note)]);
+    return ['ok' => true, 'message' => 'Tiket berhasil ditutup.'];
+}
+
+function eos_extract_ticket_id_from_text(string $text): ?string
+{
+    if (preg_match('/\b(TCK-\d{8}-\d{6}-[A-Z0-9]{4})\b/i', $text, $match)) {
+        return strtoupper($match[1]);
+    }
+    return null;
+}
+
+function eos_telegram_ticket_created_message(string $ticketId): string
+{
+    $ticket = eos_find_ticket($ticketId);
+    if ($ticket === null) {
+        return 'Tiket berhasil dibuat.';
+    }
+
+    return "🎫 <b>Tiket Baru Dibuat</b>\n" .
+        "No Tiket: <b>" . eos_format_plain((string) $ticket['ticket_id']) . "</b>\n" .
+        "Jam: <b>" . eos_format_plain((string) $ticket['issue_time']) . "</b>\n" .
+        "Site: <b>" . eos_format_plain((string) $ticket['site']) . "</b>\n" .
+        "Kendala: " . eos_format_plain((string) $ticket['issue']) . "\n" .
+        "Balas pesan ini dengan <b>on proses</b> untuk mulai penanganan, atau <b>done catatan...</b> untuk menutup tiket.";
+}
+
+function eos_telegram_ticket_status_message(string $ticketId, string $status): string
+{
+    $ticket = eos_find_ticket($ticketId);
+    if ($ticket === null) {
+        return 'Tiket tidak ditemukan.';
+    }
+
+    if ($status === 'on_check') {
+        return "🛠️ <b>Tiket On Proses</b>\n" .
+            "No Tiket: <b>" . eos_format_plain((string) $ticket['ticket_id']) . "</b>\n" .
+            "Site: <b>" . eos_format_plain((string) $ticket['site']) . "</b>\n" .
+            "Kendala: " . eos_format_plain((string) $ticket['issue']) . "\n" .
+            "Diproses oleh: <b>" . eos_format_plain((string) ($ticket['checked_by'] ?? '-')) . "</b>\n" .
+            "Mulai: <b>" . eos_format_plain((string) ($ticket['checked_at'] ?? '-')) . "</b>\n" .
+            "Balas pesan ini dengan <b>done catatan...</b> jika penanganan sudah selesai.";
+    }
+
+    return "✅ <b>Tiket Selesai</b>\n" .
+        "No Tiket: <b>" . eos_format_plain((string) $ticket['ticket_id']) . "</b>\n" .
+        "Site: <b>" . eos_format_plain((string) $ticket['site']) . "</b>\n" .
+        "Kendala: " . eos_format_plain((string) $ticket['issue']) . "\n" .
+        "Diproses oleh: <b>" . eos_format_plain((string) ($ticket['checked_by'] ?? '-')) . "</b>\n" .
+        "Selesai oleh: <b>" . eos_format_plain((string) ($ticket['done_by'] ?? '-')) . "</b>\n" .
+        "Lama Penanganan: <b>" . eos_format_plain(eos_ticket_duration_label($ticket['repair_minutes'] ?? null)) . "</b>\n" .
+        "Catatan: " . eos_format_plain((string) ($ticket['note'] ?: '-'));
+}
+
+function eos_ticket_monthly_report(string $month): array
+{
+    if (!preg_match('/^\d{4}-\d{2}$/', $month)) {
+        $month = date('Y-m');
+    }
+
+    $items = array_values(array_filter(eos_visible_tickets(), static function ($ticket) use ($month) {
+        return strpos((string) ($ticket['created_at'] ?? ''), $month) === 0;
+    }));
+
+    return array_map(static function ($ticket) {
+        return [
+            'ticket_id' => $ticket['ticket_id'],
+            'site' => $ticket['site'],
+            'issue' => $ticket['issue'],
+            'issue_time' => $ticket['issue_time'],
+            'status' => $ticket['status'],
+            'repair_duration' => eos_ticket_duration_label($ticket['repair_minutes']),
+            'note' => $ticket['note'],
+        ];
+    }, $items);
+}
+
+function eos_ticket_daily_report(string $date): array
+{
+    if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $date)) {
+        $date = date('Y-m-d');
+    }
+
+    $items = array_values(array_filter(eos_visible_tickets(), static function ($ticket) use ($date) {
+        return strpos((string) ($ticket['created_at'] ?? ''), $date) === 0;
+    }));
+
+    return [
+        'date' => $date,
+        'open' => count(array_filter($items, static fn($ticket) => ($ticket['status'] ?? '') === 'open')),
+        'on_check' => count(array_filter($items, static fn($ticket) => ($ticket['status'] ?? '') === 'on_check')),
+        'done' => count(array_filter($items, static fn($ticket) => ($ticket['status'] ?? '') === 'done')),
+        'items' => array_map(static function ($ticket) {
+            return [
+                'ticket_id' => $ticket['ticket_id'],
+                'site' => $ticket['site'],
+                'issue' => $ticket['issue'],
+                'issue_time' => $ticket['issue_time'],
+                'status' => $ticket['status'],
+                'repair_duration' => eos_ticket_duration_label($ticket['repair_minutes']),
+                'repair_minutes' => $ticket['repair_minutes'],
+                'note' => $ticket['note'],
+            ];
+        }, $items),
+    ];
+}
+
+function eos_telegram_ticket_daily_summary_message(string $date): string
+{
+    $report = eos_ticket_daily_report($date);
+    $items = $report['items'] ?? [];
+
+    $lines = [
+        "📅 <b>Summary Ticket Harian {$report['date']}</b>",
+        "Open: <b>{$report['open']}</b>",
+        "On Check: <b>{$report['on_check']}</b>",
+        "Done: <b>{$report['done']}</b>",
+    ];
+
+    if ($items === []) {
+        $lines[] = "Detail: tidak ada tiket untuk tanggal ini.";
+        return implode("\n", $lines);
+    }
+
+    $lines[] = "Detail:";
+    foreach (array_slice($items, 0, 8) as $item) {
+        $lines[] = eos_format_plain(
+            $item['ticket_id'] . ' | ' .
+            $item['site'] . ' | ' .
+            strtoupper((string) $item['status']) . ' | ' .
+            $item['issue'] . ' | penanganan: ' . ($item['repair_duration'] ?: '-')
+        );
+    }
+
+    return implode("\n", $lines);
+}
+
+function eos_extract_site_from_text(string $text): string
+{
+    $gateId = eos_extract_gate_id($text);
+    if ($gateId !== null) {
+        return $gateId;
+    }
+
+    if (preg_match('/\bsite\s+([a-z0-9_-]+)\b/i', $text, $match) === 1) {
+        return strtoupper($match[1]);
+    }
+
+    if (preg_match('/\bserver\b/i', $text) === 1) {
+        return 'SERVER';
+    }
+
+    return '';
+}
+
+function eos_strip_ticket_intent_prefix(string $text): string
+{
+    $clean = trim($text);
+    $patterns = [
+        '/^@?[a-z0-9_]+\s+/i',
+        '/\b(tolong|please|mohon|bantu)\b/iu',
+        '/\b(buatkan|buat|bikin|open|input|catat|laporkan|lapor)\b/iu',
+        '/\b(ticket|tiket)\b/iu',
+        '/\b(ada kendala|ada trouble|ada problem|kendala|trouble|masalah|problem|gangguan)\b/iu',
+        '/\b(di|untuk)\s+site\s+[a-z0-9_-]+\b/iu',
+    ];
+
+    foreach ($patterns as $pattern) {
+        $clean = preg_replace($pattern, ' ', $clean) ?? $clean;
+    }
+
+    return trim(preg_replace('/\s+/', ' ', $clean) ?? $clean);
+}
+
+function eos_telegram_natural_ticket_create(string $text, string $lower, array $actorContext): ?array
+{
+    $looksLikeTicket = preg_match('/\b(ticket|tiket|kendala|trouble|masalah|problem|gangguan)\b/u', $lower) === 1;
+    $looksLikeCreate = preg_match('/\b(buat|bikin|buatkan|lapor|laporkan|catat|input|open|tolong)\b/u', $lower) === 1;
+
+    if (!$looksLikeTicket || !$looksLikeCreate) {
+        return null;
+    }
+
+    $site = ($actorContext['role'] ?? 'eos') === 'admin'
+        ? (eos_extract_site_from_text($text) ?: 'SERVER')
+        : (string) ($actorContext['site'] ?? 'SERVER');
+
+    $issue = eos_strip_ticket_intent_prefix($text);
+    if ($issue === '') {
+        $issue = trim($text);
+    }
+
+    return [
+        'site' => $site,
+        'issue' => $issue,
+    ];
+}
+
+function eos_telegram_natural_ticket_summary_intent(string $lower): ?array
+{
+    if (preg_match('/\b(summary|ringkasan|rekap|laporan)\b/u', $lower) !== 1) {
+        return null;
+    }
+
+    if (preg_match('/\b(ticket|tiket)\b/u', $lower) !== 1) {
+        return null;
+    }
+
+    if (preg_match('/\b(hari ini|today|harian)\b/u', $lower) === 1) {
+        return ['type' => 'day', 'value' => date('Y-m-d')];
+    }
+
+    if (preg_match('/\b(\d{4}-\d{2}-\d{2})\b/', $lower, $match) === 1) {
+        return ['type' => 'day', 'value' => $match[1]];
+    }
+
+    if (preg_match('/\b(\d{4}-\d{2})\b/', $lower, $match) === 1) {
+        return ['type' => 'month', 'value' => $match[1]];
+    }
+
+    if (preg_match('/\b(bulan ini|monthly|perbulan|bulanan)\b/u', $lower) === 1) {
+        return ['type' => 'month', 'value' => date('Y-m')];
+    }
+
+    return null;
+}
+
+function eos_telegram_reply_is_on_process(string $text): bool
+{
+    return preg_match('/^(on proses|on process|proses|sedang diproses|lagi diproses|sedang di cek|sedang dicek|oncheck|on check)$/iu', trim($text)) === 1;
+}
+
+function eos_telegram_reply_done_note(string $text): ?string
+{
+    $trimmed = trim($text);
+    if (preg_match('/^(done|selesai|sudah selesai|sudah beres|beres|clear)(?:\s*[:\-]?\s*(.+))?$/isu', $trimmed, $match) === 1) {
+        return trim((string) ($match[2] ?? ''));
+    }
+    return null;
+}
+
+function eos_telegram_actor_context(array $message): array
+{
+    $from = $message['from'] ?? [];
+    $telegramUsername = trim((string) ($from['username'] ?? ''));
+    $fallbackUsername = 'telegram_' . (string) ($from['id'] ?? 'guest');
+    $actorUsername = $telegramUsername !== '' ? $telegramUsername : $fallbackUsername;
+
+    $users = eos_users();
+    if (isset($users[$actorUsername])) {
+        return [
+            'username' => $actorUsername,
+            'role' => (string) ($users[$actorUsername]['role'] ?? 'eos'),
+            'site' => (string) ($users[$actorUsername]['site'] ?? 'SERVER'),
+            'mapped' => true,
+        ];
+    }
+
+    return [
+        'username' => $actorUsername,
+        'role' => 'eos',
+        'site' => 'SERVER',
+        'mapped' => false,
+    ];
+}
+
+function eos_telegram_ticket_row(array $ticket): string
+{
+    return $ticket['ticket_id'] . ' | ' . $ticket['site'] . ' | ' . strtoupper((string) ($ticket['status'] ?? '-')) . ' | ' . ($ticket['issue'] ?? '-');
+}
+
+function eos_telegram_visible_tickets_text(array $tickets, int $limit = 6): string
+{
+    if ($tickets === []) {
+        return 'Belum ada tiket yang terlihat untuk user ini.';
+    }
+
+    $lines = [];
+    foreach (array_slice($tickets, 0, $limit) as $ticket) {
+        $lines[] = eos_telegram_ticket_row($ticket);
+    }
+    return implode("\n", $lines);
 }
 
 function eos_tail(string $file, int $limit = 80): array
@@ -1308,6 +2169,9 @@ function eos_dashboard_summary(): array
         $gate['timbangan_latency'] = $networkMap[$timbanganKey]['latency'] ?? null;
         return $gate;
     }, (array) eos_config('devices.gates', []));
+    $visibleTickets = eos_visible_tickets();
+    $openTickets = count(array_filter($visibleTickets, static fn($ticket) => ($ticket['status'] ?? '') === 'open'));
+    $onCheckTickets = count(array_filter($visibleTickets, static fn($ticket) => ($ticket['status'] ?? '') === 'on_check'));
     return [
         'app_name' => eos_config('app_name'),
         'board_name' => 'EOS CONTROL BOARD',
@@ -1323,6 +2187,18 @@ function eos_dashboard_summary(): array
         'devices' => [
             'cameras' => $cameras,
             'gates' => $gates,
+        ],
+        'auth' => [
+            'username' => eos_current_user(),
+            'role' => eos_current_user_role(),
+            'site' => eos_current_user_site(),
+            'is_admin' => eos_is_admin(),
+            'sites' => eos_ticket_sites(),
+        ],
+        'tickets' => [
+            'open' => $openTickets,
+            'on_check' => $onCheckTickets,
+            'recent' => array_slice($visibleTickets, 0, 8),
         ],
         'modules' => $modules,
         'controller' => $controller,
@@ -1353,6 +2229,9 @@ function eos_controller_modules(?array $disk = null, ?array $network = null): ar
             $networkOnline++;
         }
     }
+    $tickets = eos_visible_tickets();
+    $ticketOpen = count(array_filter($tickets, static fn($ticket) => ($ticket['status'] ?? '') === 'open'));
+    $ticketCheck = count(array_filter($tickets, static fn($ticket) => ($ticket['status'] ?? '') === 'on_check'));
 
     return [
         [
@@ -1394,6 +2273,14 @@ function eos_controller_modules(?array $disk = null, ?array $network = null): ar
             'led' => $stateExists ? '#a3e635' : '#eab308',
             'description' => 'Scheduler disk monitor dan telegram poll.',
             'meta' => $stateExists ? 'state file aktif' : 'menunggu scheduler pertama',
+        ],
+        [
+            'key' => 'TKT',
+            'label' => 'TICKET BUS',
+            'status' => $ticketOpen > 0 ? 'warning' : ($ticketCheck > 0 ? 'standby' : 'ready'),
+            'led' => $ticketOpen > 0 ? '#f97316' : ($ticketCheck > 0 ? '#eab308' : '#22c55e'),
+            'description' => 'Pelacakan trouble, on check, dan tiket selesai berbasis log file.',
+            'meta' => $ticketOpen . ' open / ' . $ticketCheck . ' on check',
         ],
         [
             'key' => 'NET',
@@ -1563,14 +2450,162 @@ function eos_telegram_process_update(array $update): array
     $lower = strtolower($text);
     eos_log('Perintah Telegram diterima: ' . $text, 'telegram', 'telegram');
     $replyMessageId = $message['message_id'] ?? null;
+    $actorContext = eos_telegram_actor_context($message);
+    eos_begin_impersonation($actorContext['username'], $actorContext['role'], $actorContext['site']);
 
+    try {
+        return eos_telegram_process_update_as_actor($text, $lower, $chatId, $replyMessageId, $message, $actorContext);
+    } finally {
+        eos_end_impersonation();
+    }
+}
+
+function eos_telegram_process_update_as_actor(string $text, string $lower, string $chatId, $replyMessageId, array $message, array $actorContext): array
+{
     if ($lower === '/start' || $lower === '/help') {
         eos_send_telegram(
-            eos_telegram_with_identity("EOS Tools siap.\nPerintah:\n/disk\n/network\n/health\n/restart <POOL>\n/restart-group <GROUP>\n/iis"),
+            eos_telegram_with_identity("EOS Tools siap.\nPerintah:\n/disk\n/network\n/health\n/restart <POOL>\n/restart-group <GROUP>\n/iis\n/ticket <kendala>\n/ticket <SITE> | <kendala>\n/tickets\n/ticket-report <YYYY-MM>\n/ticket-day [YYYY-MM-DD]\n\nAlur cepat tiket:\n1. buat tiket dengan /ticket ...\n2. reply balasan tiket dengan: on proses\n3. reply lagi dengan: done catatan..."),
             [$chatId],
             ['reply_to_message_id' => $replyMessageId]
         );
         return ['handled' => true, 'command' => 'help'];
+    }
+
+    if (preg_match('/^\/ticket-day(?:\s+(\d{4}-\d{2}-\d{2}))?$/i', trim($text), $match)) {
+        $date = $match[1] ?? date('Y-m-d');
+        eos_send_telegram(
+            eos_telegram_with_identity(eos_telegram_ticket_daily_summary_message($date)),
+            [$chatId],
+            ['reply_to_message_id' => $replyMessageId]
+        );
+        return ['handled' => true, 'command' => 'ticket_day'];
+    }
+
+    $replyText = trim((string) (($message['reply_to_message']['text'] ?? $message['reply_to_message']['caption'] ?? '')));
+    $repliedTicketId = $replyText !== '' ? eos_extract_ticket_id_from_text($replyText) : null;
+
+    if ($repliedTicketId !== null) {
+        if (eos_telegram_reply_is_on_process($text)) {
+            $result = eos_mark_ticket_on_check_by_actor($repliedTicketId);
+            $messageText = $result['ok']
+                ? eos_telegram_ticket_status_message($repliedTicketId, 'on_check')
+                : '⚠️ ' . $result['message'];
+            eos_send_telegram(
+                eos_telegram_with_identity($messageText),
+                [$chatId],
+                ['reply_to_message_id' => $replyMessageId]
+            );
+            return ['handled' => true, 'command' => 'ticket_reply_on_check'];
+        }
+
+        $doneNote = eos_telegram_reply_done_note($text);
+        if ($doneNote !== null) {
+            $note = $doneNote;
+            $result = eos_mark_ticket_done_by_actor($repliedTicketId, $note);
+            $messageText = $result['ok']
+                ? eos_telegram_ticket_status_message($repliedTicketId, 'done')
+                : '⚠️ ' . $result['message'];
+            eos_send_telegram(
+                eos_telegram_with_identity($messageText),
+                [$chatId],
+                ['reply_to_message_id' => $replyMessageId]
+            );
+            return ['handled' => true, 'command' => 'ticket_reply_done'];
+        }
+    }
+
+    if (eos_telegram_is_addressed($text, $message)) {
+        $ticketSummaryIntent = eos_telegram_natural_ticket_summary_intent($lower);
+        if ($ticketSummaryIntent !== null) {
+            if (($ticketSummaryIntent['type'] ?? '') === 'month') {
+                $monthValue = (string) $ticketSummaryIntent['value'];
+                $rows = eos_ticket_monthly_report($monthValue);
+                $messageText = "🗓️ <b>Ticket Report {$monthValue}</b>\n" . eos_format_plain(eos_telegram_visible_tickets_text(array_map(static function ($row) {
+                    return [
+                        'ticket_id' => $row['ticket_id'],
+                        'site' => $row['site'],
+                        'status' => $row['status'],
+                        'issue' => $row['issue'] . ' | ' . ($row['repair_duration'] ?: '-') . ' | ' . ($row['note'] ?: '-'),
+                    ];
+                }, $rows), 10));
+            } else {
+                $messageText = eos_telegram_ticket_daily_summary_message((string) $ticketSummaryIntent['value']);
+            }
+            eos_send_telegram(
+                eos_telegram_with_identity($messageText),
+                [$chatId],
+                ['reply_to_message_id' => $replyMessageId]
+            );
+            return ['handled' => true, 'command' => 'ticket_natural_summary'];
+        }
+
+        $naturalTicket = eos_telegram_natural_ticket_create($text, $lower, $actorContext);
+        if ($naturalTicket !== null) {
+            $result = eos_create_ticket(date('Y-m-d H:i:s'), (string) $naturalTicket['site'], (string) $naturalTicket['issue']);
+            $messageText = $result['ok']
+                ? eos_telegram_ticket_created_message((string) $result['ticket_id'])
+                : '⚠️ ' . $result['message'];
+            eos_send_telegram(
+                eos_telegram_with_identity($messageText),
+                [$chatId],
+                ['reply_to_message_id' => $replyMessageId]
+            );
+            return ['handled' => true, 'command' => 'ticket_natural_create'];
+        }
+    }
+
+    if (preg_match('/^\/ticket-report(?:\s+(\d{4}-\d{2}))?$/i', trim($text), $match)) {
+        $month = $match[1] ?? date('Y-m');
+        $rows = eos_ticket_monthly_report($month);
+        eos_send_telegram(
+            eos_telegram_with_identity("🗓️ <b>Ticket Report {$month}</b>\n" . eos_format_plain(eos_telegram_visible_tickets_text(array_map(static function ($row) {
+                return [
+                    'ticket_id' => $row['ticket_id'],
+                    'site' => $row['site'],
+                    'status' => $row['status'],
+                    'issue' => $row['issue'] . ' | ' . ($row['repair_duration'] ?: '-') . ' | ' . ($row['note'] ?: '-'),
+                ];
+            }, $rows), 10))),
+            [$chatId],
+            ['reply_to_message_id' => $replyMessageId]
+        );
+        return ['handled' => true, 'command' => 'ticket_report'];
+    }
+
+    if ($lower === '/tickets' || $lower === '/ticket-list') {
+        $tickets = eos_visible_tickets();
+        eos_send_telegram(
+            eos_telegram_with_identity("🎫 <b>Ticket Board</b>\n" . eos_format_plain(eos_telegram_visible_tickets_text($tickets))),
+            [$chatId],
+            ['reply_to_message_id' => $replyMessageId]
+        );
+        return ['handled' => true, 'command' => 'tickets'];
+    }
+
+    if (preg_match('/^\/ticket\s+(.+)$/is', trim($text), $match)) {
+        $input = trim($match[1]);
+        $site = $actorContext['role'] === 'admin' ? 'SERVER' : (string) ($actorContext['site'] ?? 'SERVER');
+        $issue = $input;
+        if (strpos($input, '|') !== false) {
+            [$left, $right] = array_map('trim', explode('|', $input, 2));
+            if (($actorContext['role'] ?? 'eos') === 'admin' && $left !== '' && $right !== '') {
+                $site = strtoupper($left);
+                $issue = $right;
+            } elseif ($right !== '') {
+                $issue = $right;
+            }
+        }
+
+        $result = eos_create_ticket(date('Y-m-d H:i:s'), $site, $issue);
+        $messageText = $result['ok']
+            ? eos_telegram_ticket_created_message((string) $result['ticket_id'])
+            : '⚠️ ' . $result['message'];
+        eos_send_telegram(
+            eos_telegram_with_identity($messageText),
+            [$chatId],
+            ['reply_to_message_id' => $replyMessageId]
+        );
+        return ['handled' => true, 'command' => 'ticket_create'];
     }
 
     if ($lower === '/disk' || strpos($lower, 'disk') !== false) {

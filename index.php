@@ -96,6 +96,84 @@ if (isset($_GET['api'])) {
             $result = eos_telegram_poll_once();
             eos_json($result, $result['ok'] ? 200 : 502);
             break;
+
+        case 'tickets':
+            eos_json(['ok' => true, 'data' => eos_visible_tickets()]);
+            break;
+
+        case 'ticket_create':
+            if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+                eos_json(['ok' => false, 'message' => 'Method tidak valid.'], 405);
+            }
+            $result = eos_create_ticket(
+                (string) ($_POST['issue_time'] ?? ''),
+                (string) ($_POST['site'] ?? ''),
+                (string) ($_POST['issue'] ?? '')
+            );
+            eos_json($result, $result['ok'] ? 200 : 422);
+            break;
+
+        case 'ticket_on_check':
+            if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+                eos_json(['ok' => false, 'message' => 'Method tidak valid.'], 405);
+            }
+            $result = eos_mark_ticket_on_check((string) ($_POST['ticket_id'] ?? ''));
+            eos_json($result, $result['ok'] ? 200 : 422);
+            break;
+
+        case 'ticket_done':
+            if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+                eos_json(['ok' => false, 'message' => 'Method tidak valid.'], 405);
+            }
+            $result = eos_mark_ticket_done((string) ($_POST['ticket_id'] ?? ''), (string) ($_POST['note'] ?? ''));
+            eos_json($result, $result['ok'] ? 200 : 422);
+            break;
+
+        case 'ticket_report':
+            $month = (string) ($_GET['month'] ?? date('Y-m'));
+            eos_json(['ok' => true, 'data' => eos_ticket_monthly_report($month)]);
+            break;
+
+        case 'users':
+            eos_require_admin();
+            eos_json(['ok' => true, 'data' => eos_user_list_public()]);
+            break;
+
+        case 'user_create':
+            if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+                eos_json(['ok' => false, 'message' => 'Method tidak valid.'], 405);
+            }
+            $result = eos_create_user(
+                (string) ($_POST['username'] ?? ''),
+                (string) ($_POST['password'] ?? ''),
+                (string) ($_POST['role'] ?? 'eos'),
+                (string) ($_POST['site'] ?? 'SERVER')
+            );
+            eos_json($result, $result['ok'] ? 200 : 422);
+            break;
+
+        case 'user_update':
+            if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+                eos_json(['ok' => false, 'message' => 'Method tidak valid.'], 405);
+            }
+            $active = isset($_POST['active']) ? ((string) $_POST['active'] === '1') : null;
+            $result = eos_update_user(
+                (string) ($_POST['username'] ?? ''),
+                (string) ($_POST['role'] ?? 'eos'),
+                (string) ($_POST['site'] ?? 'SERVER'),
+                (string) ($_POST['password'] ?? ''),
+                $active
+            );
+            eos_json($result, $result['ok'] ? 200 : 422);
+            break;
+
+        case 'user_delete':
+            if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+                eos_json(['ok' => false, 'message' => 'Method tidak valid.'], 405);
+            }
+            $result = eos_delete_user((string) ($_POST['username'] ?? ''));
+            eos_json($result, $result['ok'] ? 200 : 422);
+            break;
     }
 
     eos_json(['ok' => false, 'message' => 'API tidak ditemukan.'], 404);
@@ -215,6 +293,10 @@ exit;
 endif;
 
 $summary = eos_dashboard_summary();
+$auth = $summary['auth'] ?? [];
+$isAdmin = (bool) ($auth['is_admin'] ?? false);
+$siteOptions = (array) ($auth['sites'] ?? []);
+$lockedSite = (string) ($auth['site'] ?? 'SERVER');
 ?>
 <!doctype html>
 <html lang="id">
@@ -870,6 +952,22 @@ $summary = eos_dashboard_summary();
                             <div class="k">Telegram Poll Time</div>
                             <div class="v" id="telegramPollTime">-</div>
                         </div>
+                        <div class="meta-card">
+                            <div class="k">Role</div>
+                            <div class="v" id="authRole"><?= strtoupper(eos_h((string) ($auth['role'] ?? '-'))) ?></div>
+                        </div>
+                        <div class="meta-card">
+                            <div class="k">Site Scope</div>
+                            <div class="v" id="authSite"><?= eos_h((string) ($auth['site'] ?? '-')) ?></div>
+                        </div>
+                        <div class="meta-card">
+                            <div class="k">Ticket Open</div>
+                            <div class="v" id="ticketOpenCount"><?= eos_h((string) ($summary['tickets']['open'] ?? 0)) ?></div>
+                        </div>
+                        <div class="meta-card">
+                            <div class="k">Ticket On Check</div>
+                            <div class="v" id="ticketOnCheckCount"><?= eos_h((string) ($summary['tickets']['on_check'] ?? 0)) ?></div>
+                        </div>
                     </div>
                     <div class="runtime-stack">
                         <div class="mode-card">
@@ -897,6 +995,11 @@ $summary = eos_dashboard_summary();
                     <a class="nav-anchor" href="#overview" data-target="overview">Overview</a>
                     <a class="nav-anchor" href="#control" data-target="control">Control</a>
                     <a class="nav-anchor" href="#sensor" data-target="sensor">Sensor</a>
+                    <a class="nav-anchor" href="#ticketing" data-target="ticketing">Ticketing</a>
+                    <a class="nav-anchor" href="#report" data-target="report">Report</a>
+                    <?php if ($isAdmin): ?>
+                        <a class="nav-anchor" href="#accounts" data-target="accounts">Accounts</a>
+                    <?php endif; ?>
                     <a class="nav-anchor" href="#terminal" data-target="terminal">Terminal</a>
                     <a class="nav-anchor" href="#guide" data-target="guide">Panduan</a>
                     <a class="nav-anchor" href="#inventory" data-target="inventory">Inventory</a>
@@ -910,10 +1013,15 @@ $summary = eos_dashboard_summary();
                             <a class="menu-link nav-anchor" href="#overview" data-target="overview"><span>Overview Board</span><span>01</span></a>
                             <a class="menu-link nav-anchor" href="#control" data-target="control"><span>Switch Matrix</span><span>02</span></a>
                             <a class="menu-link nav-anchor" href="#sensor" data-target="sensor"><span>Sensor Rack</span><span>03</span></a>
-                            <a class="menu-link nav-anchor" href="#terminal" data-target="terminal"><span>Serial Terminal</span><span>04</span></a>
-                            <a class="menu-link nav-anchor" href="#guide" data-target="guide"><span>Panduan Chat</span><span>05</span></a>
-                            <a class="menu-link nav-anchor" href="#inventory" data-target="inventory"><span>Inventori</span><span>06</span></a>
-                            <a class="menu-link nav-anchor" href="#logs" data-target="logs"><span>System Logs</span><span>07</span></a>
+                            <a class="menu-link nav-anchor" href="#ticketing" data-target="ticketing"><span>Ticketing</span><span>04</span></a>
+                            <a class="menu-link nav-anchor" href="#report" data-target="report"><span>Monthly Report</span><span>05</span></a>
+                            <?php if ($isAdmin): ?>
+                                <a class="menu-link nav-anchor" href="#accounts" data-target="accounts"><span>Account Access</span><span>06</span></a>
+                            <?php endif; ?>
+                            <a class="menu-link nav-anchor" href="#terminal" data-target="terminal"><span>Serial Terminal</span><span><?= $isAdmin ? '07' : '06' ?></span></a>
+                            <a class="menu-link nav-anchor" href="#guide" data-target="guide"><span>Panduan Chat</span><span><?= $isAdmin ? '08' : '07' ?></span></a>
+                            <a class="menu-link nav-anchor" href="#inventory" data-target="inventory"><span>Inventori</span><span><?= $isAdmin ? '09' : '08' ?></span></a>
+                            <a class="menu-link nav-anchor" href="#logs" data-target="logs"><span>System Logs</span><span><?= $isAdmin ? '10' : '09' ?></span></a>
                         </div>
                     </aside>
 
@@ -1040,6 +1148,173 @@ $summary = eos_dashboard_summary();
                     </section>
                         </div>
 
+                <div id="ticketing" class="board-grid section-anchor" style="margin-top:16px;">
+                    <section class="panel">
+                        <h2>Ticket Intake</h2>
+                        <p>EOS input kendala awal. Admin/petugas akan lanjutkan ke ON CHECK lalu DONE.</p>
+                        <div class="field">
+                            <label for="ticketIssueTime">JAM KEJADIAN</label>
+                            <input id="ticketIssueTime" value="<?= eos_h(date('Y-m-d H:i:s')) ?>">
+                        </div>
+                        <div class="field">
+                            <label for="ticketSite">SITE</label>
+                            <select id="ticketSite" <?= $isAdmin ? '' : 'disabled' ?>>
+                                <?php foreach ($siteOptions as $site): ?>
+                                    <option value="<?= eos_h($site) ?>" <?= $site === $lockedSite ? 'selected' : '' ?>><?= eos_h($site) ?></option>
+                                <?php endforeach; ?>
+                            </select>
+                        </div>
+                        <div class="field">
+                            <label for="ticketIssue">KENDALA / TROUBLE</label>
+                            <textarea id="ticketIssue" placeholder="misal: barrier gate 03i tidak merespons, kamera gate 02o putus"></textarea>
+                        </div>
+                        <div class="button-grid">
+                            <button class="btn-main" onclick="createTicket()">BUAT TIKET</button>
+                            <button class="btn-soft" onclick="loadTickets()">REFRESH TIKET</button>
+                        </div>
+                        <div class="hint">Role `eos` dikunci ke site miliknya. Role `admin` bisa input dan lihat lintas site.</div>
+                    </section>
+
+                    <section class="panel" style="grid-column:span 2;">
+                        <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap;">
+                            <div>
+                                <h2>Ticket Board</h2>
+                                <p>Daftar tiket aktif dan riwayat singkat yang diambil dari log file ticket.</p>
+                            </div>
+                            <div class="toggle-status">
+                                <span class="toggle-pill">Open: <strong id="ticketOpenBadge"><?= eos_h((string) ($summary['tickets']['open'] ?? 0)) ?></strong></span>
+                                <span class="toggle-pill">On Check: <strong id="ticketCheckBadge"><?= eos_h((string) ($summary['tickets']['on_check'] ?? 0)) ?></strong></span>
+                            </div>
+                        </div>
+                        <div class="table-wrap">
+                            <table class="inventory">
+                                <thead>
+                                    <tr>
+                                        <th>ID</th>
+                                        <th>Jam</th>
+                                        <th>Site</th>
+                                        <th>Kendala</th>
+                                        <th>Status</th>
+                                        <th>Lama</th>
+                                        <th>Catatan</th>
+                                        <th>Aksi</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="ticketTableBody">
+                                    <?php foreach (($summary['tickets']['recent'] ?? []) as $ticket): ?>
+                                        <tr>
+                                            <td><?= eos_h((string) $ticket['ticket_id']) ?></td>
+                                            <td><?= eos_h((string) $ticket['issue_time']) ?></td>
+                                            <td><?= eos_h((string) $ticket['site']) ?></td>
+                                            <td><?= eos_h((string) $ticket['issue']) ?></td>
+                                            <td><?= strtoupper(eos_h((string) $ticket['status'])) ?></td>
+                                            <td><?= eos_h(eos_ticket_duration_label($ticket['repair_minutes'] ?? null)) ?></td>
+                                            <td><?= eos_h((string) ($ticket['note'] ?? '-')) ?></td>
+                                            <td><?= $isAdmin ? 'Admin action via refresh' : '-' ?></td>
+                                        </tr>
+                                    <?php endforeach; ?>
+                                </tbody>
+                            </table>
+                        </div>
+                    </section>
+                </div>
+
+                <div id="report" class="log-grid section-anchor" style="margin-top:16px;">
+                    <section class="panel" style="grid-column:1 / -1;">
+                        <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap;">
+                            <div>
+                                <h3>Monthly Ticket Report</h3>
+                                <p>Rekap bulanan tiket dari file log: kendala, jam, lama perbaikan, dan catatan.</p>
+                            </div>
+                            <div style="display:flex;gap:10px;align-items:center;">
+                                <input id="reportMonth" type="month" value="<?= eos_h(date('Y-m')) ?>" style="width:auto;min-width:180px;">
+                                <button class="btn-main" onclick="loadTicketReport()">LOAD REPORT</button>
+                            </div>
+                        </div>
+                        <div class="table-wrap">
+                            <table class="inventory">
+                                <thead>
+                                    <tr>
+                                        <th>ID</th>
+                                        <th>Site</th>
+                                        <th>Kendala</th>
+                                        <th>Jam</th>
+                                        <th>Status</th>
+                                        <th>Lama Perbaikan</th>
+                                        <th>Catatan</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="ticketReportBody"></tbody>
+                            </table>
+                        </div>
+                    </section>
+                </div>
+
+                <?php if ($isAdmin): ?>
+                <div id="accounts" class="log-grid section-anchor" style="margin-top:16px;">
+                    <section class="panel">
+                        <h3>CRUD Akun</h3>
+                        <p>Admin membuat dan mengatur akun `admin` atau `eos` tanpa database.</p>
+                        <div class="field">
+                            <label for="userUsername">USERNAME</label>
+                            <input id="userUsername" placeholder="misal: petugas_gate03">
+                        </div>
+                        <div class="field">
+                            <label for="userPassword">PASSWORD</label>
+                            <input id="userPassword" placeholder="kosongkan saat update jika tidak diganti">
+                        </div>
+                        <div class="field">
+                            <label for="userRole">ROLE</label>
+                            <select id="userRole">
+                                <option value="eos">EOS</option>
+                                <option value="admin">ADMIN</option>
+                            </select>
+                        </div>
+                        <div class="field">
+                            <label for="userSite">SITE</label>
+                            <select id="userSite">
+                                <?php foreach ($siteOptions as $site): ?>
+                                    <option value="<?= eos_h($site) ?>"><?= eos_h($site) ?></option>
+                                <?php endforeach; ?>
+                            </select>
+                        </div>
+                        <div class="field">
+                            <label for="userActive">STATUS AKUN</label>
+                            <select id="userActive">
+                                <option value="1">ACTIVE</option>
+                                <option value="0">INACTIVE</option>
+                            </select>
+                        </div>
+                        <div class="button-grid">
+                            <button class="btn-main" onclick="createUserAccount()">BUAT USER</button>
+                            <button class="btn-soft" onclick="updateUserAccount()">UPDATE USER</button>
+                            <button class="btn-danger" onclick="deleteUserAccount()">HAPUS USER</button>
+                            <button class="btn-soft" onclick="loadUsers()">REFRESH USER</button>
+                        </div>
+                    </section>
+
+                    <section class="panel" style="grid-column:span 3;">
+                        <h3>Daftar Akun</h3>
+                        <p>Role `eos` dibatasi ke site tertentu. Role `admin` dapat berpindah dan mengelola semua site.</p>
+                        <div class="table-wrap">
+                            <table class="inventory">
+                                <thead>
+                                    <tr>
+                                        <th>Username</th>
+                                        <th>Role</th>
+                                        <th>Site</th>
+                                        <th>Active</th>
+                                        <th>Created</th>
+                                        <th>Updated</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="userTableBody"></tbody>
+                            </table>
+                        </div>
+                    </section>
+                </div>
+                <?php endif; ?>
+
                 <div id="guide" class="log-grid section-anchor" style="margin-top:16px;">
                     <section class="panel" style="grid-column:1 / -1;">
                         <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap;">
@@ -1047,7 +1322,7 @@ $summary = eos_dashboard_summary();
                                 <h3>Menu Panduan Chat</h3>
                                 <p>Panduan cepat agar operator tahu cara berbicara dengan bot di grup Telegram.</p>
                             </div>
-                            <div class="bus-pill">PANGGIL BOT: `@boot` / `eos tools`</div>
+                            <div class="bus-pill">PANGGIL BOT: `@Pak_Lurah_Dapit_bot` / `pak lurah dapit`</div>
                         </div>
                         <div class="guide-grid">
                             <article class="guide-card">
@@ -1057,6 +1332,14 @@ $summary = eos_dashboard_summary();
                                     <li><code>/disk</code> untuk cek kapasitas drive C.</li>
                                     <li><code>/network</code> untuk cek server, kamera, dan domain.</li>
                                     <li><code>/health</code> untuk ringkasan status sistem.</li>
+                                    <li><code>/ticket kendala...</code> untuk buat tiket.</li>
+                                    <li><code>/ticket GATE03I | barrier tidak respon</code> untuk tiket per site.</li>
+                                    <li><code>/tickets</code> untuk lihat daftar tiket.</li>
+                                    <li><code>/ticket-report 2026-07</code> untuk report bulanan.</li>
+                                    <li><code>/ticket-day</code> untuk summary tiket hari ini.</li>
+                                    <li><code>/ticket-day 2026-07-08</code> untuk summary tanggal tertentu.</li>
+                                    <li><code>reply: on proses</code> untuk ubah status jadi on check.</li>
+                                    <li><code>reply: done catatan...</code> untuk tutup tiket.</li>
                                     <li><code>/restart AMS</code> untuk restart app pool tertentu.</li>
                                     <li><code>/restart-group CGSIN_STACK</code> untuk restart satu grup.</li>
                                     <li><code>/iis</code> untuk restart IIS.</li>
@@ -1065,17 +1348,21 @@ $summary = eos_dashboard_summary();
                             <article class="guide-card">
                                 <h4>Contoh Chat Natural</h4>
                                 <ul>
-                                    <li><code>@boot disk tinggal berapa</code></li>
-                                    <li><code>@boot jaringan bagaimana</code></li>
-                                    <li><code>@boot status server bagaimana</code></li>
-                                    <li><code>@boot domain cusmod hidup tidak</code></li>
-                                    <li><code>@boot kamera online semua?</code></li>
-                                    <li><code>@boot mana yang offline sekarang</code></li>
-                                    <li><code>@boot ringkas status umum</code></li>
-                                    <li><code>@boot barrier gate 03i online tidak</code></li>
-                                    <li><code>@boot adam gate 03i online tidak</code></li>
-                                    <li><code>@boot timbangan gate02o bagaimana</code></li>
-                                    <li><code>@boot tolong bantu cek disk</code></li>
+                                    <li><code>@Pak_Lurah_Dapit_bot disk tinggal berapa</code></li>
+                                    <li><code>@Pak_Lurah_Dapit_bot jaringan bagaimana</code></li>
+                                    <li><code>@Pak_Lurah_Dapit_bot status server bagaimana</code></li>
+                                    <li><code>@Pak_Lurah_Dapit_bot domain cusmod hidup tidak</code></li>
+                                    <li><code>@Pak_Lurah_Dapit_bot kamera online semua?</code></li>
+                                    <li><code>@Pak_Lurah_Dapit_bot mana yang offline sekarang</code></li>
+                                    <li><code>@Pak_Lurah_Dapit_bot ringkas status umum</code></li>
+                                    <li><code>@Pak_Lurah_Dapit_bot barrier gate 03i online tidak</code></li>
+                                    <li><code>@Pak_Lurah_Dapit_bot adam gate 03i online tidak</code></li>
+                                    <li><code>@Pak_Lurah_Dapit_bot timbangan gate02o bagaimana</code></li>
+                                    <li><code>/ticket GATE03I | barrier tidak respon</code></li>
+                                    <li><code>/ticket-day</code></li>
+                                    <li><code>reply ke tiket: on proses</code></li>
+                                    <li><code>reply ke tiket: done barrier normal kembali</code></li>
+                                    <li><code>@Pak_Lurah_Dapit_bot tolong bantu cek disk</code></li>
                                 </ul>
                             </article>
                             <article class="guide-card">
@@ -1090,8 +1377,10 @@ $summary = eos_dashboard_summary();
                             <article class="guide-card">
                                 <h4>Nama Yang Bisa Dipanggil</h4>
                                 <ul>
-                                    <li><code>@boot</code></li>
-                                    <li><code>boot</code></li>
+                                    <li><code>@Pak_Lurah_Dapit_bot</code></li>
+                                    <li><code>pak lurah dapit</code></li>
+                                    <li><code>pak lurah</code></li>
+                                    <li><code>dapit bot</code></li>
                                     <li><code>eos</code></li>
                                     <li><code>eos tools</code></li>
                                     <li><code>eostools</code></li>
@@ -1234,6 +1523,9 @@ $summary = eos_dashboard_summary();
     </div>
 
     <script>
+        const IS_ADMIN = <?= $isAdmin ? 'true' : 'false' ?>;
+        const LOCKED_SITE = <?= json_encode($lockedSite, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?>;
+
         async function api(path, options = {}) {
             const response = await fetch(path, options);
             const data = await response.json();
@@ -1249,6 +1541,15 @@ $summary = eos_dashboard_summary();
 
         function formatObject(value) {
             return typeof value === 'string' ? value : JSON.stringify(value, null, 2);
+        }
+
+        function escapeHtml(value) {
+            return String(value ?? '')
+                .replaceAll('&', '&amp;')
+                .replaceAll('<', '&lt;')
+                .replaceAll('>', '&gt;')
+                .replaceAll('"', '&quot;')
+                .replaceAll("'", '&#039;');
         }
 
         function renderModules(modules) {
@@ -1495,6 +1796,212 @@ $summary = eos_dashboard_summary();
             }
         }
 
+        function renderTicketRows(tickets) {
+            const root = document.getElementById('ticketTableBody');
+            document.getElementById('ticketOpenBadge').textContent = tickets.filter((ticket) => ticket.status === 'open').length;
+            document.getElementById('ticketCheckBadge').textContent = tickets.filter((ticket) => ticket.status === 'on_check').length;
+            root.innerHTML = tickets.map((ticket) => {
+                const actions = [];
+                if (IS_ADMIN && ticket.status === 'open') {
+                    actions.push(`<button class="btn-soft" onclick="markTicketOnCheck('${escapeHtml(ticket.ticket_id)}')">ON CHECK</button>`);
+                }
+                if (IS_ADMIN && ticket.status !== 'done') {
+                    actions.push(`<button class="btn-main" onclick="markTicketDone('${escapeHtml(ticket.ticket_id)}')">DONE</button>`);
+                }
+                return `
+                    <tr>
+                        <td>${escapeHtml(ticket.ticket_id)}</td>
+                        <td>${escapeHtml(ticket.issue_time)}</td>
+                        <td>${escapeHtml(ticket.site)}</td>
+                        <td>${escapeHtml(ticket.issue)}</td>
+                        <td>${escapeHtml(String(ticket.status || '-').toUpperCase())}</td>
+                        <td>${escapeHtml(ticket.repair_minutes === null ? '-' : `${ticket.repair_minutes} menit`)}</td>
+                        <td>${escapeHtml(ticket.note || '-')}</td>
+                        <td>${actions.join(' ') || '-'}</td>
+                    </tr>
+                `;
+            }).join('') || '<tr><td colspan="8">Belum ada tiket.</td></tr>';
+        }
+
+        async function loadTickets() {
+            try {
+                const result = await api('?api=tickets');
+                renderTicketRows(result.data);
+            } catch (error) {
+                setOutput('ERROR loadTickets: ' + error.message);
+            }
+        }
+
+        async function createTicket() {
+            const issue_time = document.getElementById('ticketIssueTime').value;
+            const site = IS_ADMIN ? document.getElementById('ticketSite').value : LOCKED_SITE;
+            const issue = document.getElementById('ticketIssue').value;
+            setOutput('> create ticket\n> writing ticket log...');
+            try {
+                const result = await api('?api=ticket_create', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+                    body: new URLSearchParams({issue_time, site, issue})
+                });
+                setOutput(result.message + ' ID: ' + result.ticket_id);
+                document.getElementById('ticketIssue').value = '';
+                loadTickets();
+                loadTicketReport();
+                refreshSummary();
+                refreshLogs();
+            } catch (error) {
+                setOutput('ERROR createTicket: ' + error.message);
+            }
+        }
+
+        async function markTicketOnCheck(ticketId) {
+            setOutput('> ticket ' + ticketId + '\n> set status on check...');
+            try {
+                const result = await api('?api=ticket_on_check', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+                    body: new URLSearchParams({ticket_id: ticketId})
+                });
+                setOutput(result.message);
+                loadTickets();
+                loadTicketReport();
+                refreshSummary();
+                refreshLogs();
+            } catch (error) {
+                setOutput('ERROR markTicketOnCheck: ' + error.message);
+            }
+        }
+
+        async function markTicketDone(ticketId) {
+            const note = prompt('Catatan penyelesaian tiket:', '');
+            if (note === null) {
+                return;
+            }
+            setOutput('> ticket ' + ticketId + '\n> set status done...');
+            try {
+                const result = await api('?api=ticket_done', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+                    body: new URLSearchParams({ticket_id: ticketId, note})
+                });
+                setOutput(result.message);
+                loadTickets();
+                loadTicketReport();
+                refreshSummary();
+                refreshLogs();
+            } catch (error) {
+                setOutput('ERROR markTicketDone: ' + error.message);
+            }
+        }
+
+        async function loadTicketReport() {
+            try {
+                const month = document.getElementById('reportMonth').value || new Date().toISOString().slice(0, 7);
+                const result = await api('?api=ticket_report&month=' + encodeURIComponent(month));
+                const root = document.getElementById('ticketReportBody');
+                root.innerHTML = result.data.map((item) => `
+                    <tr>
+                        <td>${escapeHtml(item.ticket_id)}</td>
+                        <td>${escapeHtml(item.site)}</td>
+                        <td>${escapeHtml(item.issue)}</td>
+                        <td>${escapeHtml(item.issue_time)}</td>
+                        <td>${escapeHtml(String(item.status || '-').toUpperCase())}</td>
+                        <td>${escapeHtml(item.repair_duration || '-')}</td>
+                        <td>${escapeHtml(item.note || '-')}</td>
+                    </tr>
+                `).join('') || '<tr><td colspan="7">Belum ada data untuk bulan ini.</td></tr>';
+            } catch (error) {
+                setOutput('ERROR loadTicketReport: ' + error.message);
+            }
+        }
+
+        async function loadUsers() {
+            if (!IS_ADMIN) return;
+            try {
+                const result = await api('?api=users');
+                const root = document.getElementById('userTableBody');
+                root.innerHTML = result.data.map((user) => `
+                    <tr onclick="fillUserForm('${escapeHtml(user.username)}','${escapeHtml(user.role)}','${escapeHtml(user.site)}','${user.active ? '1' : '0'}')" style="cursor:pointer;">
+                        <td>${escapeHtml(user.username)}</td>
+                        <td>${escapeHtml(String(user.role).toUpperCase())}</td>
+                        <td>${escapeHtml(user.site)}</td>
+                        <td>${user.active ? 'ACTIVE' : 'INACTIVE'}</td>
+                        <td>${escapeHtml(user.created_at || '-')}</td>
+                        <td>${escapeHtml(user.updated_at || '-')}</td>
+                    </tr>
+                `).join('') || '<tr><td colspan="6">Belum ada user.</td></tr>';
+            } catch (error) {
+                setOutput('ERROR loadUsers: ' + error.message);
+            }
+        }
+
+        function fillUserForm(username, role, site, active) {
+            if (!IS_ADMIN) return;
+            document.getElementById('userUsername').value = username;
+            document.getElementById('userRole').value = role;
+            document.getElementById('userSite').value = site;
+            document.getElementById('userActive').value = active;
+            document.getElementById('userPassword').value = '';
+        }
+
+        async function createUserAccount() {
+            const username = document.getElementById('userUsername').value;
+            const password = document.getElementById('userPassword').value;
+            const role = document.getElementById('userRole').value;
+            const site = document.getElementById('userSite').value;
+            try {
+                const result = await api('?api=user_create', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+                    body: new URLSearchParams({username, password, role, site})
+                });
+                setOutput(result.message);
+                loadUsers();
+                refreshLogs();
+            } catch (error) {
+                setOutput('ERROR createUserAccount: ' + error.message);
+            }
+        }
+
+        async function updateUserAccount() {
+            const username = document.getElementById('userUsername').value;
+            const password = document.getElementById('userPassword').value;
+            const role = document.getElementById('userRole').value;
+            const site = document.getElementById('userSite').value;
+            const active = document.getElementById('userActive').value;
+            try {
+                const result = await api('?api=user_update', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+                    body: new URLSearchParams({username, password, role, site, active})
+                });
+                setOutput(result.message);
+                loadUsers();
+                refreshLogs();
+            } catch (error) {
+                setOutput('ERROR updateUserAccount: ' + error.message);
+            }
+        }
+
+        async function deleteUserAccount() {
+            const username = document.getElementById('userUsername').value;
+            if (!username || !confirm('Hapus user ' + username + '?')) {
+                return;
+            }
+            try {
+                const result = await api('?api=user_delete', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+                    body: new URLSearchParams({username})
+                });
+                setOutput(result.message);
+                loadUsers();
+                refreshLogs();
+            } catch (error) {
+                setOutput('ERROR deleteUserAccount: ' + error.message);
+            }
+        }
+
         async function refreshLogs() {
             try {
                 const [activity, telegram, network] = await Promise.all([
@@ -1525,6 +2032,10 @@ $summary = eos_dashboard_summary();
                 document.getElementById('runtimeLabel').textContent = result.data.runtime.label || '-';
                 document.getElementById('runtimeIp').textContent = result.data.runtime.ip || '-';
                 document.getElementById('runtimeHost').textContent = `${result.data.runtime.label || '-'} / ${result.data.runtime.ip || '-'}`;
+                document.getElementById('authRole').textContent = String(result.data.auth.role || '-').toUpperCase();
+                document.getElementById('authSite').textContent = result.data.auth.site || '-';
+                document.getElementById('ticketOpenCount').textContent = result.data.tickets.open || 0;
+                document.getElementById('ticketOnCheckCount').textContent = result.data.tickets.on_check || 0;
                 renderModules(result.data.modules);
             } catch (error) {
             }
@@ -1535,6 +2046,9 @@ $summary = eos_dashboard_summary();
             checkDisk(false);
             scanNetwork(false);
             refreshSummary();
+            loadTickets();
+            loadTicketReport();
+            loadUsers();
         }
 
         const DASHBOARD_MODE_KEY = 'eos_tools_dashboard_mode';
@@ -1626,6 +2140,9 @@ $summary = eos_dashboard_summary();
 
         checkDisk(false);
         scanNetwork(false);
+        loadTickets();
+        loadTicketReport();
+        loadUsers();
         setupSectionNavigation();
         currentDashboardMode = loadDashboardMode();
         updateDashboardModeUI();

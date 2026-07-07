@@ -7,13 +7,25 @@ return [
     'users' => [
         'halotec' => 'halotec',
     ],
+    'sites' => [
+        'options' => [
+            'SERVER',
+            'GATE01I', 'GATE01O', 'GATE02I', 'GATE02O', 'GATE03I', 'GATE03O',
+            'GATE04I', 'GATE04O', 'GATE05I', 'GATE05O', 'GATE06I', 'GATE06O',
+            'GATE07I', 'GATE08I', 'GATE11O',
+        ],
+    ],
     'telegram' => [
         'bot_token' => '6924587019:AAGAL14FraFfWSA4kR_lIwWY5T6rlk1UagE',
         'chat_ids' => ['-1002149116231', '-1125589160', '-4166697858'],
         'poll_state_file' => __DIR__ . '/storage/state/telegram_offset.json',
         'webhook_key' => 'eos-tools-secure-key',
-        'bot_name' => 'EOS Tools',
-        'aliases' => ['eos', 'eos tools', 'eostools', 'bot eos', 'boot', '@boot'],
+        'bot_name' => 'Pak Lurah Dapit',
+        'aliases' => [
+            'bot', 'eos', 'eos tools', 'eostools', 'bot eos',
+            'pak lurah dapit', 'pak lurah', 'dapit bot',
+            'pak_lurah_dapit_bot', '@pak_lurah_dapit_bot',
+        ],
         'include_responder_identity' => true,
     ],
     'disk' => [
@@ -162,6 +174,8 @@ return [
         'app_log' => __DIR__ . '/storage/logs/activity.log',
         'telegram_log' => __DIR__ . '/storage/logs/telegram.log',
         'network_log' => __DIR__ . '/storage/logs/network.log',
+        'ticket_log' => __DIR__ . '/storage/logs/tickets.log',
+        'user_store' => __DIR__ . '/storage/state/users.txt',
     ],
     'runtime' => [
         'responder_label' => 'AUTO',

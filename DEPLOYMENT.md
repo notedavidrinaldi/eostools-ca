@@ -84,6 +84,18 @@ Checklist chat bot:
 - `@boot adam gate 03i online tidak`
 - `@boot timbangan gate02o bagaimana`
 
+Panduan cek via Telegram untuk operator:
+
+1. kirim `@boot ringkas status umum`
+2. jika ada indikasi masalah, kirim `@boot mana yang offline sekarang`
+3. jika sudah ketemu area masalah, lanjutkan dengan cek spesifik:
+   `@boot kamera online semua?`
+   `@boot barrier gate 03i online tidak`
+   `@boot adam gate 03i online tidak`
+   `@boot timbangan gate02o bagaimana`
+   `@boot domain cusmod hidup tidak`
+4. pakai `/network`, `/disk`, atau `/health` jika butuh report formal
+
 ## 6. Scheduler Windows
 
 Jalankan periodik lewat Task Scheduler:
