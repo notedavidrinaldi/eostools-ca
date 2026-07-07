@@ -77,7 +77,7 @@ function eos_ensure_runtime(): void
         }
     }
 
-    foreach ([eos_config('paths.ticket_log'), eos_config('paths.user_store')] as $file) {
+    foreach ([eos_config('paths.ticket_log'), eos_config('paths.ticket_index'), eos_config('paths.user_store')] as $file) {
         if ($file && !is_file($file)) {
             @file_put_contents($file, '');
         }
@@ -520,72 +520,112 @@ function eos_ticket_log_path(): string
     return (string) eos_config('paths.ticket_log');
 }
 
-function eos_ticket_append_event(string $event, array $payload): void
+function eos_ticket_index_path(): string
 {
-    $row = [
-        'ts' => date('c'),
-        'event' => $event,
-        'actor' => eos_current_user() ?: 'system',
-        'payload' => $payload,
+    return (string) eos_config('paths.ticket_index');
+}
+
+function eos_ticket_empty_index(): array
+{
+    return [
+        'source_size' => 0,
+        'source_mtime' => 0,
+        'tickets' => [],
+        'order' => [],
+        'by_day' => [],
+        'by_month' => [],
     ];
-    @file_put_contents(eos_ticket_log_path(), json_encode($row, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . "\n", FILE_APPEND);
 }
 
-function eos_generate_ticket_id(): string
+function eos_ticket_load_index(): array
 {
-    return 'TCK-' . date('Ymd-His') . '-' . strtoupper(substr(md5((string) microtime(true)), 0, 4));
-}
-
-function eos_ticket_records(): array
-{
-    $file = eos_ticket_log_path();
-    if (!is_file($file)) {
-        return [];
+    $file = eos_ticket_index_path();
+    if ($file === '' || !is_file($file)) {
+        return eos_ticket_empty_index();
     }
 
-    $tickets = [];
-    $lines = file($file, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [];
-    foreach ($lines as $line) {
-        $entry = json_decode($line, true);
-        if (!is_array($entry) || !is_array($entry['payload'] ?? null)) {
-            continue;
-        }
+    $raw = trim((string) @file_get_contents($file));
+    if ($raw === '') {
+        return eos_ticket_empty_index();
+    }
 
-        $payload = $entry['payload'];
-        $ticketId = (string) ($payload['ticket_id'] ?? '');
-        if ($ticketId === '') {
-            continue;
-        }
+    $decoded = json_decode($raw, true);
+    return is_array($decoded) ? array_merge(eos_ticket_empty_index(), $decoded) : eos_ticket_empty_index();
+}
 
-        if (($entry['event'] ?? '') === 'ticket_created') {
-            $tickets[$ticketId] = [
-                'ticket_id' => $ticketId,
-                'created_at' => (string) ($payload['created_at'] ?? ($entry['ts'] ?? date('c'))),
-                'issue_time' => (string) ($payload['issue_time'] ?? ''),
-                'site' => strtoupper((string) ($payload['site'] ?? 'SERVER')),
-                'issue' => (string) ($payload['issue'] ?? ''),
-                'status' => 'open',
-                'created_by' => (string) ($payload['created_by'] ?? ($entry['actor'] ?? 'system')),
-                'checked_at' => null,
-                'checked_by' => null,
-                'done_at' => null,
-                'done_by' => null,
-                'note' => '',
-            ];
-            continue;
-        }
+function eos_ticket_save_index(array $index): void
+{
+    $file = eos_ticket_index_path();
+    if ($file === '') {
+        return;
+    }
 
-        if (!isset($tickets[$ticketId])) {
-            continue;
-        }
+    @file_put_contents($file, json_encode($index, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+}
 
-        if (($entry['event'] ?? '') === 'ticket_on_check') {
+function eos_ticket_sort_and_index(array $index): array
+{
+    $tickets = $index['tickets'] ?? [];
+    uasort($tickets, static function ($a, $b) {
+        return strcmp((string) ($b['created_at'] ?? ''), (string) ($a['created_at'] ?? ''));
+    });
+
+    $index['tickets'] = $tickets;
+    $index['order'] = array_keys($tickets);
+    $index['by_day'] = [];
+    $index['by_month'] = [];
+
+    foreach ($tickets as $ticketId => $ticket) {
+        $createdAt = (string) ($ticket['created_at'] ?? '');
+        $day = substr($createdAt, 0, 10);
+        $month = substr($createdAt, 0, 7);
+        if (strlen($day) === 10) {
+            $index['by_day'][$day][] = $ticketId;
+        }
+        if (strlen($month) === 7) {
+            $index['by_month'][$month][] = $ticketId;
+        }
+    }
+
+    return $index;
+}
+
+function eos_ticket_apply_event_to_index(array $index, array $entry): array
+{
+    if (!is_array($entry['payload'] ?? null)) {
+        return $index;
+    }
+
+    $payload = $entry['payload'];
+    $ticketId = (string) ($payload['ticket_id'] ?? '');
+    if ($ticketId === '') {
+        return $index;
+    }
+
+    $tickets = $index['tickets'] ?? [];
+    $event = (string) ($entry['event'] ?? '');
+
+    if ($event === 'ticket_created') {
+        $tickets[$ticketId] = [
+            'ticket_id' => $ticketId,
+            'created_at' => (string) ($payload['created_at'] ?? ($entry['ts'] ?? date('c'))),
+            'issue_time' => (string) ($payload['issue_time'] ?? ''),
+            'site' => strtoupper((string) ($payload['site'] ?? 'SERVER')),
+            'issue' => (string) ($payload['issue'] ?? ''),
+            'status' => 'open',
+            'created_by' => (string) ($payload['created_by'] ?? ($entry['actor'] ?? 'system')),
+            'checked_at' => null,
+            'checked_by' => null,
+            'done_at' => null,
+            'done_by' => null,
+            'note' => '',
+        ];
+    } elseif (isset($tickets[$ticketId])) {
+        if ($event === 'ticket_on_check') {
             $tickets[$ticketId]['status'] = 'on_check';
             $tickets[$ticketId]['checked_at'] = (string) ($payload['checked_at'] ?? ($entry['ts'] ?? date('c')));
             $tickets[$ticketId]['checked_by'] = (string) ($payload['checked_by'] ?? ($entry['actor'] ?? 'system'));
-        }
-
-        if (($entry['event'] ?? '') === 'ticket_done') {
+        } elseif ($event === 'ticket_done') {
             $tickets[$ticketId]['status'] = 'done';
             $tickets[$ticketId]['done_at'] = (string) ($payload['done_at'] ?? ($entry['ts'] ?? date('c')));
             $tickets[$ticketId]['done_by'] = (string) ($payload['done_by'] ?? ($entry['actor'] ?? 'system'));
@@ -598,11 +638,79 @@ function eos_ticket_records(): array
     }
     unset($ticket);
 
-    uasort($tickets, static function ($a, $b) {
-        return strcmp((string) ($b['created_at'] ?? ''), (string) ($a['created_at'] ?? ''));
-    });
+    $index['tickets'] = $tickets;
+    return eos_ticket_sort_and_index($index);
+}
 
-    return array_values($tickets);
+function eos_ticket_rebuild_index(): array
+{
+    $file = eos_ticket_log_path();
+    $index = eos_ticket_empty_index();
+    if (!is_file($file)) {
+        eos_ticket_save_index($index);
+        return $index;
+    }
+
+    $lines = file($file, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [];
+    foreach ($lines as $line) {
+        $entry = json_decode($line, true);
+        if (!is_array($entry)) {
+            continue;
+        }
+        $index = eos_ticket_apply_event_to_index($index, $entry);
+    }
+
+    $index['source_size'] = (int) @filesize($file);
+    $index['source_mtime'] = (int) @filemtime($file);
+    eos_ticket_save_index($index);
+    return $index;
+}
+
+function eos_ticket_synced_index(): array
+{
+    $file = eos_ticket_log_path();
+    if (!is_file($file)) {
+        return eos_ticket_empty_index();
+    }
+
+    $index = eos_ticket_load_index();
+    $size = (int) @filesize($file);
+    $mtime = (int) @filemtime($file);
+
+    if (($index['source_size'] ?? -1) !== $size || ($index['source_mtime'] ?? -1) !== $mtime) {
+        return eos_ticket_rebuild_index();
+    }
+
+    return $index;
+}
+
+function eos_ticket_append_event(string $event, array $payload): void
+{
+    $row = [
+        'ts' => date('c'),
+        'event' => $event,
+        'actor' => eos_current_user() ?: 'system',
+        'payload' => $payload,
+    ];
+    $file = eos_ticket_log_path();
+    @file_put_contents($file, json_encode($row, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . "\n", FILE_APPEND);
+
+    $index = eos_ticket_load_index();
+    $index = eos_ticket_apply_event_to_index($index, $row);
+    $index['source_size'] = (int) @filesize($file);
+    $index['source_mtime'] = (int) @filemtime($file);
+    eos_ticket_save_index($index);
+}
+
+function eos_generate_ticket_id(): string
+{
+    return 'TCK-' . date('Ymd-His') . '-' . strtoupper(substr(md5((string) microtime(true)), 0, 4));
+}
+
+function eos_ticket_records(): array
+{
+    $index = eos_ticket_synced_index();
+    return array_values($index['tickets'] ?? []);
 }
 
 function eos_ticket_repair_minutes(array $ticket): ?int
@@ -798,9 +906,21 @@ function eos_ticket_monthly_report(string $month): array
         $month = date('Y-m');
     }
 
-    $items = array_values(array_filter(eos_visible_tickets(), static function ($ticket) use ($month) {
-        return strpos((string) ($ticket['created_at'] ?? ''), $month) === 0;
-    }));
+    $visibleSites = eos_is_admin() ? null : [strtoupper((string) eos_current_user_site()) => true];
+    $index = eos_ticket_synced_index();
+    $ticketMap = $index['tickets'] ?? [];
+    $ticketIds = $index['by_month'][$month] ?? [];
+    $items = [];
+    foreach ($ticketIds as $ticketId) {
+        $ticket = $ticketMap[$ticketId] ?? null;
+        if (!is_array($ticket)) {
+            continue;
+        }
+        if ($visibleSites !== null && !isset($visibleSites[strtoupper((string) ($ticket['site'] ?? ''))])) {
+            continue;
+        }
+        $items[] = $ticket;
+    }
 
     return array_map(static function ($ticket) {
         return [
@@ -821,9 +941,21 @@ function eos_ticket_daily_report(string $date): array
         $date = date('Y-m-d');
     }
 
-    $items = array_values(array_filter(eos_visible_tickets(), static function ($ticket) use ($date) {
-        return strpos((string) ($ticket['created_at'] ?? ''), $date) === 0;
-    }));
+    $visibleSites = eos_is_admin() ? null : [strtoupper((string) eos_current_user_site()) => true];
+    $index = eos_ticket_synced_index();
+    $ticketMap = $index['tickets'] ?? [];
+    $ticketIds = $index['by_day'][$date] ?? [];
+    $items = [];
+    foreach ($ticketIds as $ticketId) {
+        $ticket = $ticketMap[$ticketId] ?? null;
+        if (!is_array($ticket)) {
+            continue;
+        }
+        if ($visibleSites !== null && !isset($visibleSites[strtoupper((string) ($ticket['site'] ?? ''))])) {
+            continue;
+        }
+        $items[] = $ticket;
+    }
 
     return [
         'date' => $date,

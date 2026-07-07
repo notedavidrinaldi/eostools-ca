@@ -20,6 +20,15 @@ Super app operasional untuk:
 - Telegram webhook: `/eos-tools/telegram_webhook.php?key=...`
 - Controller relay: `/eos-tools/controller.php?key=...&cmd=status`
 
+## Ticket Storage
+
+Sementara ticketing masih menggunakan file log sebagai sumber utama, tanpa database:
+
+- log utama ticket: `storage/logs/tickets.log`
+- cache index ticket: `storage/state/tickets.index.json`
+
+Model ini dibuat agar tetap ringan, tetapi pencarian harian, bulanan, dan pembacaan board tiket tetap cepat karena tidak perlu parsing ulang seluruh file log setiap kali request.
+
 ## CI
 
 Workflow GitHub Actions tersedia di:

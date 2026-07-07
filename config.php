@@ -271,6 +271,7 @@ return [
         'telegram_log' => __DIR__ . '/storage/logs/telegram.log',
         'network_log' => __DIR__ . '/storage/logs/network.log',
         'ticket_log' => __DIR__ . '/storage/logs/tickets.log',
+        'ticket_index' => __DIR__ . '/storage/state/tickets.index.json',
         'user_store' => __DIR__ . '/storage/state/users.txt',
     ],
     'runtime' => [
