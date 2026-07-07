@@ -1361,6 +1361,16 @@ function eos_telegram_human_reply(string $text, array $message): ?string
     return "Saya tangkap pesan Anda, {$name}. Kalau ingin aksi cepat, sebut saja yang mau dicek atau pakai command seperti /disk, /health, /restart, atau /iis.";
 }
 
+function eos_telegram_normalize_command_text(string $text): string
+{
+    $trimmed = trim($text);
+    if ($trimmed === '') {
+        return '';
+    }
+
+    return preg_replace('/^(\/[a-z0-9_-]+)@[a-z0-9_]+/iu', '$1', $trimmed) ?? $trimmed;
+}
+
 function eos_telegram_smart_intent_reply(string $lower, string $name, string $botName): ?string
 {
     $asksDisk = preg_match('/\b(disk|storage|penyimpanan|kapasitas|drive c|sisa disk|disk tinggal)\b/u', $lower) === 1;
@@ -2617,6 +2627,9 @@ function eos_telegram_process_update(array $update): array
 
 function eos_telegram_process_update_as_actor(string $text, string $lower, string $chatId, $replyMessageId, array $message, array $actorContext): array
 {
+    $text = eos_telegram_normalize_command_text($text);
+    $lower = strtolower($text);
+
     if ($lower === '/start' || $lower === '/help') {
         eos_send_telegram(
             eos_telegram_with_identity("EOS Tools siap.\nPerintah:\n/disk\n/network\n/health\n/restart <POOL>\n/restart-group <GROUP>\n/iis\n/ticket <kendala>\n/ticket <SITE> | <kendala>\n/tickets\n/ticket-report <YYYY-MM>\n/ticket-day [YYYY-MM-DD]\n\nAlur cepat tiket:\n1. buat tiket dengan /ticket ...\n2. reply balasan tiket dengan: on proses\n3. reply lagi dengan: done catatan..."),
