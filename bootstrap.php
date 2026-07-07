@@ -1080,12 +1080,16 @@ function eos_telegram_natural_ticket_create(string $text, string $lower, array $
 
 function eos_telegram_natural_ticket_summary_intent(string $lower): ?array
 {
-    if (preg_match('/\b(summary|ringkasan|rekap|laporan)\b/u', $lower) !== 1) {
+    if (preg_match('/\b(summary|ringkasan|rekap|laporan|tampilkan|tunjukkan|lihat|cek|show|display|list|daftar)\b/u', $lower) !== 1) {
         return null;
     }
 
     if (preg_match('/\b(ticket|tiket)\b/u', $lower) !== 1) {
         return null;
+    }
+
+    if (preg_match('/\b(aktif|active|open|on check|oncheck|belum selesai|ongoing|progress)\b/u', $lower) === 1) {
+        return ['type' => 'active', 'value' => 'active'];
     }
 
     if (preg_match('/\b(hari ini|today|harian)\b/u', $lower) === 1) {
@@ -1149,6 +1153,14 @@ function eos_telegram_actor_context(array $message): array
 function eos_telegram_ticket_row(array $ticket): string
 {
     return $ticket['ticket_id'] . ' | ' . $ticket['site'] . ' | ' . strtoupper((string) ($ticket['status'] ?? '-')) . ' | ' . ($ticket['issue'] ?? '-');
+}
+
+function eos_visible_active_tickets(): array
+{
+    return array_values(array_filter(eos_visible_tickets(), static function ($ticket) {
+        $status = strtolower((string) ($ticket['status'] ?? ''));
+        return $status === 'open' || $status === 'on_check';
+    }));
 }
 
 function eos_telegram_visible_tickets_text(array $tickets, int $limit = 6): string
@@ -2660,7 +2672,10 @@ function eos_telegram_process_update_as_actor(string $text, string $lower, strin
     if (eos_telegram_is_addressed($text, $message)) {
         $ticketSummaryIntent = eos_telegram_natural_ticket_summary_intent($lower);
         if ($ticketSummaryIntent !== null) {
-            if (($ticketSummaryIntent['type'] ?? '') === 'month') {
+            if (($ticketSummaryIntent['type'] ?? '') === 'active') {
+                $activeTickets = eos_visible_active_tickets();
+                $messageText = "🎫 <b>Tiket Aktif</b>\n" . eos_format_plain(eos_telegram_visible_tickets_text($activeTickets, 10));
+            } elseif (($ticketSummaryIntent['type'] ?? '') === 'month') {
                 $monthValue = (string) $ticketSummaryIntent['value'];
                 $rows = eos_ticket_monthly_report($monthValue);
                 $messageText = "🗓️ <b>Ticket Report {$monthValue}</b>\n" . eos_format_plain(eos_telegram_visible_tickets_text(array_map(static function ($row) {
