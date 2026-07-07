@@ -161,16 +161,31 @@ Setiap balasan interaktif Telegram juga bisa menyertakan identitas program yang 
 
 Contoh chat natural:
 
-- `@boot mana yang offline sekarang`
-- `@boot ringkas status umum`
-- `@boot barrier gate 03i online tidak`
-- `@boot adam gate 03i online tidak`
-- `@boot timbangan gate02o bagaimana`
+- `bot mana yang offline sekarang`
+- `pak lurah ringkas status umum`
+- `dapit bot barrier gate 03i online tidak`
+- `@Pak_Lurah_Dapit_bot adam gate 03i online tidak`
+- `pak lurah dapit timbangan gate02o bagaimana`
 
 - `runtime.responder_label`
 - `runtime.responder_ip`
 
 di `config.local.php`.
+
+## Checklist Ticketing
+
+Uji minimal fitur ticketing setelah deploy:
+
+1. login sebagai `halotec / halotec`
+2. buat tiket dari web dengan jam, site, dan kendala
+3. ubah tiket ke `ON CHECK` dari web
+4. tutup tiket ke `DONE` dan isi catatan
+5. cek report bulanan apakah durasi dan catatan tampil
+6. buat satu user role `eos` dan pastikan site user terkunci
+7. buat tiket dari Telegram dengan `/ticket ...`
+8. reply tiket dari Telegram dengan `on proses`
+9. reply lagi dengan `done catatan...`
+10. cek `/ticket-day` dan pastikan waktu penanganan ikut tampil
 
 ## Controller commands
 

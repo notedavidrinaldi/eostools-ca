@@ -1474,7 +1474,8 @@ function eos_telegram_target_status_snippet(array $target): string
 {
     $status = eos_status_label((string) ($target['status'] ?? 'unknown'));
     $latency = (string) ($target['latency'] ?? '-');
-    return "{$target['label']} {$status} ({$latency})";
+    $endpoint = (string) ($target['endpoint'] ?? '-');
+    return "{$target['label']} {$status} ({$latency}) [{$endpoint}]";
 }
 
 function eos_telegram_overall_status_reply(string $name): string

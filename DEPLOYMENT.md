@@ -77,23 +77,28 @@ Checklist cepat setelah deploy:
 
 Checklist chat bot:
 
-- `@boot ringkas status umum`
-- `@boot mana yang offline sekarang`
-- `@boot kamera online semua?`
-- `@boot barrier gate 03i online tidak`
-- `@boot adam gate 03i online tidak`
-- `@boot timbangan gate02o bagaimana`
+- `bot ringkas status umum`
+- `pak lurah mana yang offline sekarang`
+- `dapit bot kamera online semua?`
+- `@Pak_Lurah_Dapit_bot barrier gate 03i online tidak`
+- `@Pak_Lurah_Dapit_bot adam gate 03i online tidak`
+- `pak lurah dapit timbangan gate02o bagaimana`
+- `/ticket GATE03I | barrier tidak respon`
+- `reply: on proses`
+- `reply: done barrier normal kembali`
+- `/ticket-day`
+- `/ticket-day 2026-07-08`
 
 Panduan cek via Telegram untuk operator:
 
-1. kirim `@boot ringkas status umum`
-2. jika ada indikasi masalah, kirim `@boot mana yang offline sekarang`
+1. kirim `bot ringkas status umum`
+2. jika ada indikasi masalah, kirim `pak lurah mana yang offline sekarang`
 3. jika sudah ketemu area masalah, lanjutkan dengan cek spesifik:
-   `@boot kamera online semua?`
-   `@boot barrier gate 03i online tidak`
-   `@boot adam gate 03i online tidak`
-   `@boot timbangan gate02o bagaimana`
-   `@boot domain cusmod hidup tidak`
+   `dapit bot kamera online semua?`
+   `@Pak_Lurah_Dapit_bot barrier gate 03i online tidak`
+   `@Pak_Lurah_Dapit_bot adam gate 03i online tidak`
+   `pak lurah dapit timbangan gate02o bagaimana`
+   `bot domain cusmod hidup tidak`
 4. pakai `/network`, `/disk`, atau `/health` jika butuh report formal
 
 ## 6. Scheduler Windows
