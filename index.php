@@ -1160,7 +1160,7 @@ $lockedSite = (string) ($auth['site'] ?? 'SERVER');
                             <label for="ticketSite">SITE</label>
                             <select id="ticketSite" <?= $isAdmin ? '' : 'disabled' ?>>
                                 <?php foreach ($siteOptions as $site): ?>
-                                    <option value="<?= eos_h($site) ?>" <?= $site === $lockedSite ? 'selected' : '' ?>><?= eos_h($site) ?></option>
+                                    <option value="<?= eos_h($site) ?>" <?= $site === $lockedSite ? 'selected' : '' ?>><?= eos_h(eos_site_label($site)) ?></option>
                                 <?php endforeach; ?>
                             </select>
                         </div>
@@ -1274,7 +1274,7 @@ $lockedSite = (string) ($auth['site'] ?? 'SERVER');
                             <label for="userSite">SITE</label>
                             <select id="userSite">
                                 <?php foreach ($siteOptions as $site): ?>
-                                    <option value="<?= eos_h($site) ?>"><?= eos_h($site) ?></option>
+                                    <option value="<?= eos_h($site) ?>"><?= eos_h(eos_site_label($site)) ?></option>
                                 <?php endforeach; ?>
                             </select>
                         </div>

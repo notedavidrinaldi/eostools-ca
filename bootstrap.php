@@ -336,6 +336,16 @@ function eos_ticket_sites(): array
     return array_values($sites);
 }
 
+function eos_site_label(string $site): string
+{
+    $normalized = strtoupper(trim($site));
+    if ($normalized === 'SERVER') {
+        return 'Common Gate Area';
+    }
+
+    return $normalized !== '' ? $normalized : trim($site);
+}
+
 function eos_current_user(): ?string
 {
     global $eosActingUser;
