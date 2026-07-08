@@ -48,21 +48,37 @@
         const API_HEADERS = { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' };
 
         async function api(path, options = {}) {
-            const requestKey = options.requestKey || path;
-            const controller = new AbortController();
-            if (REQUEST_STATE.has(requestKey)) {
-                REQUEST_STATE.get(requestKey).abort();
+            const {
+                requestKey = path,
+                cancelPrevious = false,
+                reusePending = true,
+                ...fetchOptions
+            } = options;
+            const currentRequest = REQUEST_STATE.get(requestKey);
+            if (currentRequest) {
+                if (cancelPrevious === true) {
+                    currentRequest.controller.abort();
+                } else if (reusePending !== false) {
+                    return currentRequest.promise;
+                }
             }
-            REQUEST_STATE.set(requestKey, controller);
-            try {
-                const response = await fetch(path, {...options, signal: controller.signal});
+
+            const controller = new AbortController();
+            const requestPromise = (async () => {
+                const response = await fetch(path, {...fetchOptions, signal: controller.signal});
                 const data = await response.json().catch(() => ({}));
                 if (!response.ok) {
                     throw new Error(data.message || 'Request gagal');
                 }
                 return data;
+            })();
+
+            REQUEST_STATE.set(requestKey, {controller, promise: requestPromise});
+
+            try {
+                return await requestPromise;
             } finally {
-                if (REQUEST_STATE.get(requestKey) === controller) {
+                if (REQUEST_STATE.get(requestKey)?.controller === controller) {
                     REQUEST_STATE.delete(requestKey);
                 }
             }
@@ -86,7 +102,8 @@
                 },
                 body: new URLSearchParams(formData),
                 requestKey: options.requestKey || path,
+                cancelPrevious: options.cancelPrevious === true,
+                reusePending: options.reusePending === true,
                 ...options,
             });
         }
-

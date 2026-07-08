@@ -1,5 +1,4 @@
 let currentDashboardMode = 'user';
-let telegramPollIntervalId = null;
 let userLogoutTimerId = null;
 let refreshTimers = {
     summary: null,
@@ -7,14 +6,37 @@ let refreshTimers = {
     disk: null,
     network: null,
 };
+let refreshCycleToken = 0;
+let telegramPollTimeoutId = null;
 
 function clearDashboardTimers() {
+    refreshCycleToken += 1;
     Object.entries(refreshTimers).forEach(([, timerId]) => {
         if (timerId) {
-            clearInterval(timerId);
+            clearTimeout(timerId);
         }
     });
     refreshTimers = {summary: null, logs: null, disk: null, network: null};
+}
+
+function scheduleRecurringTask(taskName, taskRunner, intervalMs) {
+    if (intervalMs <= 0) {
+        refreshTimers[taskName] = null;
+        return;
+    }
+
+    const cycleToken = refreshCycleToken;
+    const run = async () => {
+        try {
+            await taskRunner();
+        } finally {
+            if (refreshCycleToken === cycleToken) {
+                refreshTimers[taskName] = setTimeout(run, intervalMs);
+            }
+        }
+    };
+
+    refreshTimers[taskName] = setTimeout(run, intervalMs);
 }
 
 function applyDashboardModeClass() {
@@ -29,18 +51,10 @@ function configureAutoRefresh() {
     clearDashboardTimers();
     const profile = getRefreshProfile();
 
-    if (profile.summary > 0) {
-        refreshTimers.summary = setInterval(refreshSummary, profile.summary);
-    }
-    if (profile.logs > 0) {
-        refreshTimers.logs = setInterval(refreshLogs, profile.logs);
-    }
-    if (profile.disk > 0) {
-        refreshTimers.disk = setInterval(() => checkDisk(false), profile.disk);
-    }
-    if (profile.network > 0) {
-        refreshTimers.network = setInterval(() => scanNetwork(false), profile.network);
-    }
+    scheduleRecurringTask('summary', refreshSummary, profile.summary);
+    scheduleRecurringTask('logs', refreshLogs, profile.logs);
+    scheduleRecurringTask('disk', () => checkDisk(false), profile.disk);
+    scheduleRecurringTask('network', () => scanNetwork(false), profile.network);
 }
 
 function isServerMode() {
@@ -85,13 +99,22 @@ function updateDashboardModeUI() {
 }
 
 function configureTelegramPolling() {
-    if (telegramPollIntervalId) {
-        clearInterval(telegramPollIntervalId);
-        telegramPollIntervalId = null;
+    if (telegramPollTimeoutId) {
+        clearTimeout(telegramPollTimeoutId);
+        telegramPollTimeoutId = null;
     }
     if (isServerMode()) {
-        pollTelegramSilently();
-        telegramPollIntervalId = setInterval(pollTelegramSilently, 60000);
+        const cycleToken = refreshCycleToken;
+        const runTelegramPoll = async () => {
+            try {
+                await pollTelegramSilently();
+            } finally {
+                if (refreshCycleToken === cycleToken && isServerMode()) {
+                    telegramPollTimeoutId = setTimeout(runTelegramPoll, 60000);
+                }
+            }
+        };
+        runTelegramPoll();
     } else {
         document.getElementById('telegramPollState').textContent = 'USER MODE';
     }

@@ -128,6 +128,8 @@ async function runParallel(tasks, includeLogs = false) {
     return Promise.all(queue);
 }
 
+let ticketCreateInFlight = false;
+
 async function runRestartPool() {
     const pool = document.getElementById('poolName').value;
     const note = document.getElementById('restartNote').value;
@@ -320,17 +322,33 @@ async function loadTickets(limit = REQUEST_LIMITS.tickets) {
 }
 
 async function createTicket() {
+    if (ticketCreateInFlight) {
+        setOutput('Permintaan buat tiket masih diproses. Tunggu sebentar...');
+        return;
+    }
+
     const issue_time = document.getElementById('ticketIssueTime').value;
     const site = IS_ADMIN ? document.getElementById('ticketSite').value : LOCKED_SITE;
     const issue = document.getElementById('ticketIssue').value;
+    const createButton = document.getElementById('ticketCreateBtn');
     setOutput('> create ticket\n> writing ticket log...');
+    ticketCreateInFlight = true;
+    if (createButton) {
+        createButton.disabled = true;
+    }
+
     try {
-        const result = await apiPost(API_PATH.ticket_create, {issue_time, site, issue});
+        const result = await apiPost(API_PATH.ticket_create, {issue_time, site, issue}, {requestKey: 'ticket_create_form'});
         setOutput(result.message + ' ID: ' + result.ticket_id);
         document.getElementById('ticketIssue').value = '';
         await runParallel([loadTickets(), refreshSummary(), loadTicketReport()], true);
     } catch (error) {
         setOutput('ERROR createTicket: ' + error.message);
+    } finally {
+        ticketCreateInFlight = false;
+        if (createButton) {
+            createButton.disabled = false;
+        }
     }
 }
 

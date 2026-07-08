@@ -763,6 +763,43 @@ function eos_ticket_duration_label(?int $minutes): string
     return $hours . ' jam' . ($rest > 0 ? ' ' . $rest . ' menit' : '');
 }
 
+function eos_normalize_ticket_issue(string $issue): string
+{
+    $issue = strtolower(trim($issue));
+    $issue = preg_replace('/\s+/', ' ', $issue) ?? $issue;
+    return $issue;
+}
+
+function eos_find_recent_duplicate_ticket(string $site, string $issue, int $windowSeconds = 15): ?array
+{
+    $normalizedIssue = eos_normalize_ticket_issue($issue);
+    if ($normalizedIssue === '') {
+        return null;
+    }
+
+    $now = time();
+    foreach (eos_visible_active_tickets() as $ticket) {
+        if (strtoupper((string) ($ticket['site'] ?? '')) !== strtoupper($site)) {
+            continue;
+        }
+
+        if (eos_normalize_ticket_issue((string) ($ticket['issue'] ?? '')) !== $normalizedIssue) {
+            continue;
+        }
+
+        $createdAt = strtotime((string) ($ticket['created_at'] ?? ''));
+        if ($createdAt === false) {
+            continue;
+        }
+
+        if (abs($now - $createdAt) <= $windowSeconds) {
+            return $ticket;
+        }
+    }
+
+    return null;
+}
+
 function eos_visible_tickets(?int $limit = null): array
 {
     $tickets = eos_ticket_records();
@@ -809,6 +846,16 @@ function eos_create_ticket(string $issueTime, string $site, string $issue): arra
     $site = eos_resolve_requested_site($site);
     if (!in_array($site, eos_ticket_sites(), true)) {
         return ['ok' => false, 'message' => 'Site tidak valid.'];
+    }
+
+    $duplicate = eos_find_recent_duplicate_ticket($site, $issue);
+    if ($duplicate !== null) {
+        return [
+            'ok' => true,
+            'message' => 'Tiket yang sama baru saja dibuat. Menggunakan tiket yang sudah ada.',
+            'ticket_id' => (string) ($duplicate['ticket_id'] ?? ''),
+            'duplicate' => true,
+        ];
     }
 
     $ticketId = eos_generate_ticket_id();
@@ -1179,7 +1226,7 @@ function eos_telegram_ticket_row(array $ticket): string
 
 function eos_visible_active_tickets(?int $limit = null): array
 {
-    $tickets = eos_visible_tickets($limit);
+    $tickets = eos_visible_tickets();
     $tickets = array_values(array_filter($tickets, static function ($ticket) {
         $status = strtolower((string) ($ticket['status'] ?? ''));
         return $status === 'open' || $status === 'on_check';
@@ -2390,9 +2437,9 @@ function eos_dashboard_summary(?string $scope = null): array
     $isServerScope = $scope === 'server';
     $disk = eos_disk_space_report();
     $network = eos_network_cached_state();
-    $tickets = eos_visible_tickets();
-    $openTickets = array_filter($tickets, static fn($ticket) => ($ticket['status'] ?? '') === 'open');
-    $onCheckTickets = array_filter($tickets, static fn($ticket) => ($ticket['status'] ?? '') === 'on_check');
+    $activeTickets = eos_visible_active_tickets();
+    $openTickets = array_filter($activeTickets, static fn($ticket) => ($ticket['status'] ?? '') === 'open');
+    $onCheckTickets = array_filter($activeTickets, static fn($ticket) => ($ticket['status'] ?? '') === 'on_check');
     $ticketCounts = [
         'open' => count($openTickets),
         'on_check' => count($onCheckTickets),
@@ -2450,7 +2497,7 @@ function eos_dashboard_summary(?string $scope = null): array
         'tickets' => [
             'open' => $ticketCounts['open'],
             'on_check' => $ticketCounts['on_check'],
-            'recent' => $isServerScope ? [] : array_slice($tickets, 0, 8),
+            'recent' => $isServerScope ? [] : array_slice($activeTickets, 0, 8),
         ],
         'modules' => $modules,
         'controller' => $controller,
@@ -2830,7 +2877,7 @@ function eos_telegram_process_update_as_actor(string $text, string $lower, strin
     }
 
     if ($lower === '/tickets' || $lower === '/ticket-list') {
-        $tickets = eos_visible_tickets(12);
+        $tickets = eos_visible_active_tickets(12);
         eos_send_telegram(
             eos_telegram_with_identity("🎫 <b>Ticket Board</b>\n" . eos_format_plain(eos_telegram_visible_tickets_text($tickets))),
             [$chatId],

@@ -111,10 +111,7 @@ if (isset($_GET['api'])) {
 
         case 'tickets':
             $ticketLimit = $readInt($_GET['limit'] ?? 0, 0, 200);
-            $tickets = eos_visible_tickets();
-            if ($ticketLimit > 0) {
-                $tickets = array_slice($tickets, 0, $ticketLimit);
-            }
+            $tickets = eos_visible_active_tickets($ticketLimit > 0 ? $ticketLimit : null);
             eos_json(['ok' => true, 'data' => $tickets]);
             break;
 
@@ -125,6 +122,11 @@ if (isset($_GET['api'])) {
                 (string) ($_POST['site'] ?? ''),
                 (string) ($_POST['issue'] ?? '')
             );
+            if (($result['ok'] ?? false) === true && !empty($result['ticket_id']) && empty($result['duplicate'])) {
+                eos_send_telegram(
+                    eos_telegram_with_identity(eos_telegram_ticket_created_message((string) $result['ticket_id']))
+                );
+            }
             $sendResult($result);
             break;
 
@@ -1182,7 +1184,7 @@ $lockedSite = (string) ($auth['site'] ?? 'SERVER');
                             <textarea id="ticketIssue" placeholder="misal: barrier gate 03i tidak merespons, kamera gate 02o putus"></textarea>
                         </div>
                         <div class="button-grid">
-                            <button class="btn-main" onclick="createTicket()">BUAT TIKET</button>
+                            <button id="ticketCreateBtn" class="btn-main" onclick="createTicket()">BUAT TIKET</button>
                             <button class="btn-soft" onclick="loadTickets()">REFRESH TIKET</button>
                         </div>
                         <div class="hint">Role `eos` dikunci ke site miliknya. Role `admin` bisa input dan lihat lintas site.</div>
