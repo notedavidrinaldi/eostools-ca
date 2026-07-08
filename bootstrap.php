@@ -1183,7 +1183,7 @@ function eos_visible_active_tickets(?int $limit = null): array
     $tickets = array_values(array_filter($tickets, static function ($ticket) {
         $status = strtolower((string) ($ticket['status'] ?? ''));
         return $status === 'open' || $status === 'on_check';
-    });
+    }));
 
     return eos_limit_rows($tickets, $limit);
 }
