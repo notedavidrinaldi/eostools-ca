@@ -25,41 +25,55 @@ if (isset($_GET['api'])) {
     $api = (string) $_GET['api'];
     eos_require_login();
 
+    $readInt = static function ($value, int $default = 0, int $max = 200): int {
+        $v = (int) $value;
+        if ($v <= 0) {
+            return $default;
+        }
+        return min($v, $max);
+    };
+
+    $requirePost = static function () {
+        if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+            eos_json(['ok' => false, 'message' => 'Method tidak valid.'], 405);
+        }
+    };
+
+    $sendResult = static function (array $result): void {
+        eos_json($result, ($result['ok'] ?? false) ? 200 : 422);
+    };
+
     switch ($api) {
         case 'summary':
-            eos_json(['ok' => true, 'data' => eos_dashboard_summary()]);
+            $scope = strtolower((string) ($_GET['scope'] ?? 'user'));
+            eos_json(['ok' => true, 'data' => eos_dashboard_summary($scope)]);
             break;
 
         case 'logs':
+            $logLimit = $readInt($_GET['limit'] ?? 0, 80, 300);
             $type = $_GET['type'] ?? 'app';
             $file = $type === 'telegram'
                 ? eos_config('paths.telegram_log')
                 : ($type === 'network' ? eos_config('paths.network_log') : eos_config('paths.app_log'));
-            eos_json(['ok' => true, 'logs' => eos_tail($file, 80)]);
+            eos_json(['ok' => true, 'logs' => eos_tail($file, $logLimit)]);
             break;
 
         case 'restart_pool':
-            if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
-                eos_json(['ok' => false, 'message' => 'Method tidak valid.'], 405);
-            }
+            $requirePost();
             $result = eos_restart_app_pool((string) ($_POST['pool'] ?? ''), trim((string) ($_POST['note'] ?? '')));
-            eos_json($result, $result['ok'] ? 200 : 422);
+            $sendResult($result);
             break;
 
         case 'restart_group':
-            if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
-                eos_json(['ok' => false, 'message' => 'Method tidak valid.'], 405);
-            }
+            $requirePost();
             $result = eos_restart_group((string) ($_POST['group'] ?? ''), trim((string) ($_POST['note'] ?? '')));
-            eos_json($result, $result['ok'] ? 200 : 422);
+            $sendResult($result);
             break;
 
         case 'restart_iis':
-            if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
-                eos_json(['ok' => false, 'message' => 'Method tidak valid.'], 405);
-            }
+            $requirePost();
             $result = eos_restart_iis(trim((string) ($_POST['reason'] ?? '')));
-            eos_json($result, $result['ok'] ? 200 : 422);
+            $sendResult($result);
             break;
 
         case 'disk':
@@ -77,11 +91,9 @@ if (isset($_GET['api'])) {
             break;
 
         case 'find_images':
-            if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
-                eos_json(['ok' => false, 'message' => 'Method tidak valid.'], 405);
-            }
+            $requirePost();
             $result = eos_find_backup_images((string) ($_POST['gate'] ?? ''), (string) ($_POST['datetime'] ?? ''));
-            eos_json($result, $result['ok'] ? 200 : 422);
+            $sendResult($result);
             break;
 
         case 'test_telegram':
@@ -98,35 +110,34 @@ if (isset($_GET['api'])) {
             break;
 
         case 'tickets':
-            eos_json(['ok' => true, 'data' => eos_visible_tickets()]);
+            $ticketLimit = $readInt($_GET['limit'] ?? 0, 0, 200);
+            $tickets = eos_visible_tickets();
+            if ($ticketLimit > 0) {
+                $tickets = array_slice($tickets, 0, $ticketLimit);
+            }
+            eos_json(['ok' => true, 'data' => $tickets]);
             break;
 
         case 'ticket_create':
-            if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
-                eos_json(['ok' => false, 'message' => 'Method tidak valid.'], 405);
-            }
+            $requirePost();
             $result = eos_create_ticket(
                 (string) ($_POST['issue_time'] ?? ''),
                 (string) ($_POST['site'] ?? ''),
                 (string) ($_POST['issue'] ?? '')
             );
-            eos_json($result, $result['ok'] ? 200 : 422);
+            $sendResult($result);
             break;
 
         case 'ticket_on_check':
-            if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
-                eos_json(['ok' => false, 'message' => 'Method tidak valid.'], 405);
-            }
+            $requirePost();
             $result = eos_mark_ticket_on_check((string) ($_POST['ticket_id'] ?? ''));
-            eos_json($result, $result['ok'] ? 200 : 422);
+            $sendResult($result);
             break;
 
         case 'ticket_done':
-            if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
-                eos_json(['ok' => false, 'message' => 'Method tidak valid.'], 405);
-            }
+            $requirePost();
             $result = eos_mark_ticket_done((string) ($_POST['ticket_id'] ?? ''), (string) ($_POST['note'] ?? ''));
-            eos_json($result, $result['ok'] ? 200 : 422);
+            $sendResult($result);
             break;
 
         case 'ticket_report':
@@ -136,26 +147,27 @@ if (isset($_GET['api'])) {
 
         case 'users':
             eos_require_admin();
-            eos_json(['ok' => true, 'data' => eos_user_list_public()]);
+            $userLimit = $readInt($_GET['limit'] ?? 0, 0, 500);
+            $users = eos_user_list_public();
+            if ($userLimit > 0) {
+                $users = array_slice($users, 0, $userLimit);
+            }
+            eos_json(['ok' => true, 'data' => $users]);
             break;
 
         case 'user_create':
-            if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
-                eos_json(['ok' => false, 'message' => 'Method tidak valid.'], 405);
-            }
+            $requirePost();
             $result = eos_create_user(
                 (string) ($_POST['username'] ?? ''),
                 (string) ($_POST['password'] ?? ''),
                 (string) ($_POST['role'] ?? 'eos'),
                 (string) ($_POST['site'] ?? 'SERVER')
             );
-            eos_json($result, $result['ok'] ? 200 : 422);
+            $sendResult($result);
             break;
 
         case 'user_update':
-            if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
-                eos_json(['ok' => false, 'message' => 'Method tidak valid.'], 405);
-            }
+            $requirePost();
             $active = isset($_POST['active']) ? ((string) $_POST['active'] === '1') : null;
             $result = eos_update_user(
                 (string) ($_POST['username'] ?? ''),
@@ -164,15 +176,13 @@ if (isset($_GET['api'])) {
                 (string) ($_POST['password'] ?? ''),
                 $active
             );
-            eos_json($result, $result['ok'] ? 200 : 422);
+            $sendResult($result);
             break;
 
         case 'user_delete':
-            if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
-                eos_json(['ok' => false, 'message' => 'Method tidak valid.'], 405);
-            }
+            $requirePost();
             $result = eos_delete_user((string) ($_POST['username'] ?? ''));
-            eos_json($result, $result['ok'] ? 200 : 422);
+            $sendResult($result);
             break;
     }
 
@@ -717,6 +727,9 @@ $lockedSite = (string) ($auth['site'] ?? 'SERVER');
             line-height:1.6;
             font-size:13px;
         }
+        body.dashboard-mode-server .mode-user {
+            display:none !important;
+        }
         .gallery{
             display:grid;
             grid-template-columns:repeat(2,minmax(0,1fr));
@@ -993,35 +1006,35 @@ $lockedSite = (string) ($auth['site'] ?? 'SERVER');
             <section class="content">
                 <div class="top-menu">
                     <a class="nav-anchor" href="#overview" data-target="overview">Overview</a>
-                    <a class="nav-anchor" href="#control" data-target="control">Control</a>
+                    <a class="nav-anchor mode-user" href="#control" data-target="control">Control</a>
                     <a class="nav-anchor" href="#sensor" data-target="sensor">Sensor</a>
-                    <a class="nav-anchor" href="#ticketing" data-target="ticketing">Ticketing</a>
-                    <a class="nav-anchor" href="#report" data-target="report">Report</a>
+                    <a class="nav-anchor mode-user" href="#ticketing" data-target="ticketing">Ticketing</a>
+                    <a class="nav-anchor mode-user" href="#report" data-target="report">Report</a>
                     <?php if ($isAdmin): ?>
-                        <a class="nav-anchor" href="#accounts" data-target="accounts">Accounts</a>
+                        <a class="nav-anchor mode-user" href="#accounts" data-target="accounts">Accounts</a>
                     <?php endif; ?>
-                    <a class="nav-anchor" href="#terminal" data-target="terminal">Terminal</a>
-                    <a class="nav-anchor" href="#guide" data-target="guide">Panduan</a>
-                    <a class="nav-anchor" href="#inventory" data-target="inventory">Inventory</a>
-                    <a class="nav-anchor" href="#logs" data-target="logs">Logs</a>
+                    <a class="nav-anchor mode-user" href="#terminal" data-target="terminal">Terminal</a>
+                    <a class="nav-anchor mode-user" href="#guide" data-target="guide">Panduan</a>
+                    <a class="nav-anchor mode-user" href="#inventory" data-target="inventory">Inventory</a>
+                    <a class="nav-anchor mode-user" href="#logs" data-target="logs">Logs</a>
                 </div>
 
                 <div class="nav-shell">
                     <aside class="sidebar">
-                        <h3>Sub Menu</h3>
+                    <h3>Sub Menu</h3>
                         <div class="menu-list">
                             <a class="menu-link nav-anchor" href="#overview" data-target="overview"><span>Overview Board</span><span>01</span></a>
-                            <a class="menu-link nav-anchor" href="#control" data-target="control"><span>Switch Matrix</span><span>02</span></a>
+                            <a class="menu-link nav-anchor mode-user" href="#control" data-target="control"><span>Switch Matrix</span><span>02</span></a>
                             <a class="menu-link nav-anchor" href="#sensor" data-target="sensor"><span>Sensor Rack</span><span>03</span></a>
-                            <a class="menu-link nav-anchor" href="#ticketing" data-target="ticketing"><span>Ticketing</span><span>04</span></a>
-                            <a class="menu-link nav-anchor" href="#report" data-target="report"><span>Monthly Report</span><span>05</span></a>
+                            <a class="menu-link nav-anchor mode-user" href="#ticketing" data-target="ticketing"><span>Ticketing</span><span>04</span></a>
+                            <a class="menu-link nav-anchor mode-user" href="#report" data-target="report"><span>Monthly Report</span><span>05</span></a>
                             <?php if ($isAdmin): ?>
-                                <a class="menu-link nav-anchor" href="#accounts" data-target="accounts"><span>Account Access</span><span>06</span></a>
+                                <a class="menu-link nav-anchor mode-user" href="#accounts" data-target="accounts"><span>Account Access</span><span>06</span></a>
                             <?php endif; ?>
-                            <a class="menu-link nav-anchor" href="#terminal" data-target="terminal"><span>Serial Terminal</span><span><?= $isAdmin ? '07' : '06' ?></span></a>
-                            <a class="menu-link nav-anchor" href="#guide" data-target="guide"><span>Panduan Chat</span><span><?= $isAdmin ? '08' : '07' ?></span></a>
-                            <a class="menu-link nav-anchor" href="#inventory" data-target="inventory"><span>Inventori</span><span><?= $isAdmin ? '09' : '08' ?></span></a>
-                            <a class="menu-link nav-anchor" href="#logs" data-target="logs"><span>System Logs</span><span><?= $isAdmin ? '10' : '09' ?></span></a>
+                            <a class="menu-link nav-anchor mode-user" href="#terminal" data-target="terminal"><span>Serial Terminal</span><span><?= $isAdmin ? '07' : '06' ?></span></a>
+                            <a class="menu-link nav-anchor mode-user" href="#guide" data-target="guide"><span>Panduan Chat</span><span><?= $isAdmin ? '08' : '07' ?></span></a>
+                            <a class="menu-link nav-anchor mode-user" href="#inventory" data-target="inventory"><span>Inventori</span><span><?= $isAdmin ? '09' : '08' ?></span></a>
+                            <a class="menu-link nav-anchor mode-user" href="#logs" data-target="logs"><span>System Logs</span><span><?= $isAdmin ? '10' : '09' ?></span></a>
                         </div>
                     </aside>
 
@@ -1054,7 +1067,7 @@ $lockedSite = (string) ($auth['site'] ?? 'SERVER');
                         </section>
 
                         <div class="board-grid">
-                    <section id="control" class="panel section-anchor">
+                    <section id="control" class="panel section-anchor mode-user">
                         <h2>Switch Matrix</h2>
                         <p>Panel eksekusi utama seperti saklar pada control board.</p>
                         <div class="field">
@@ -1136,7 +1149,7 @@ $lockedSite = (string) ($auth['site'] ?? 'SERVER');
                         </div>
                     </section>
 
-                    <section id="terminal" class="panel section-anchor">
+                    <section id="terminal" class="panel section-anchor mode-user">
                         <h2>Serial Terminal</h2>
                         <p>Output live seperti monitor serial untuk operator dengan format log yang lebih jelas.</p>
                         <div id="outputBox" class="terminal">Menunggu perintah...</div>
@@ -1148,7 +1161,7 @@ $lockedSite = (string) ($auth['site'] ?? 'SERVER');
                     </section>
                         </div>
 
-                <div id="ticketing" class="board-grid section-anchor" style="margin-top:16px;">
+                <div id="ticketing" class="board-grid section-anchor mode-user" style="margin-top:16px;">
                     <section class="panel">
                         <h2>Ticket Intake</h2>
                         <p>EOS input kendala awal. Admin/petugas akan lanjutkan ke ON CHECK lalu DONE.</p>
@@ -1219,7 +1232,7 @@ $lockedSite = (string) ($auth['site'] ?? 'SERVER');
                     </section>
                 </div>
 
-                <div id="report" class="log-grid section-anchor" style="margin-top:16px;">
+                <div id="report" class="log-grid section-anchor mode-user" style="margin-top:16px;">
                     <section class="panel" style="grid-column:1 / -1;">
                         <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap;">
                             <div>
@@ -1251,7 +1264,7 @@ $lockedSite = (string) ($auth['site'] ?? 'SERVER');
                 </div>
 
                 <?php if ($isAdmin): ?>
-                <div id="accounts" class="log-grid section-anchor" style="margin-top:16px;">
+                <div id="accounts" class="log-grid section-anchor mode-user" style="margin-top:16px;">
                     <section class="panel">
                         <h3>CRUD Akun</h3>
                         <p>Admin membuat dan mengatur akun `admin` atau `eos` tanpa database.</p>
@@ -1315,7 +1328,7 @@ $lockedSite = (string) ($auth['site'] ?? 'SERVER');
                 </div>
                 <?php endif; ?>
 
-                <div id="guide" class="log-grid section-anchor" style="margin-top:16px;">
+                <div id="guide" class="log-grid section-anchor mode-user" style="margin-top:16px;">
                     <section class="panel" style="grid-column:1 / -1;">
                         <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap;">
                             <div>
@@ -1391,7 +1404,7 @@ $lockedSite = (string) ($auth['site'] ?? 'SERVER');
                     </section>
                 </div>
 
-                <div id="inventory" class="log-grid section-anchor" style="margin-top:16px;">
+                <div id="inventory" class="log-grid section-anchor mode-user" style="margin-top:16px;">
                     <section class="panel" style="grid-column:1 / -1;">
                         <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap;">
                             <div>
@@ -1478,7 +1491,7 @@ $lockedSite = (string) ($auth['site'] ?? 'SERVER');
                     </section>
                 </div>
 
-                <div id="logs" class="log-grid section-anchor">
+                <div id="logs" class="log-grid section-anchor mode-user">
                     <section class="panel">
                         <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;">
                             <div>
@@ -1523,636 +1536,51 @@ $lockedSite = (string) ($auth['site'] ?? 'SERVER');
     </div>
 
     <script>
-        const IS_ADMIN = <?= $isAdmin ? 'true' : 'false' ?>;
-        const LOCKED_SITE = <?= json_encode($lockedSite, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?>;
-
-        async function api(path, options = {}) {
-            const response = await fetch(path, options);
-            const data = await response.json();
-            if (!response.ok) {
-                throw new Error(data.message || 'Request gagal');
-            }
-            return data;
-        }
-
-        function setOutput(value) {
-            document.getElementById('outputBox').textContent = value;
-        }
-
-        function formatObject(value) {
-            return typeof value === 'string' ? value : JSON.stringify(value, null, 2);
-        }
-
-        function escapeHtml(value) {
-            return String(value ?? '')
-                .replaceAll('&', '&amp;')
-                .replaceAll('<', '&lt;')
-                .replaceAll('>', '&gt;')
-                .replaceAll('"', '&quot;')
-                .replaceAll("'", '&#039;');
-        }
-
-        function renderModules(modules) {
-            document.getElementById('statusModules').innerHTML = modules.map((module) => `
-                <article class="module-card">
-                    <div class="module-head">
-                        <div>
-                            <div class="module-key">${module.key}</div>
-                            <div class="module-label">${module.label}</div>
-                        </div>
-                        <div class="led" style="color:${module.led};background:${module.led}"></div>
-                    </div>
-                    <div class="module-desc">${module.description}</div>
-                    <div class="module-meta">${module.meta}</div>
-                </article>
-            `).join('');
-        }
-
-        function setActiveNav(targetId) {
-            document.querySelectorAll('.nav-anchor').forEach((link) => {
-                link.classList.toggle('active', link.dataset.target === targetId);
-            });
-        }
-
-        function setupSectionNavigation() {
-            const sections = Array.from(document.querySelectorAll('.section-anchor'));
-            const observer = new IntersectionObserver((entries) => {
-                const visible = entries
-                    .filter((entry) => entry.isIntersecting)
-                    .sort((a, b) => b.intersectionRatio - a.intersectionRatio);
-                if (visible.length > 0) {
-                    setActiveNav(visible[0].target.id);
-                }
-            }, {
-                rootMargin: '-10% 0px -55% 0px',
-                threshold: [0.2, 0.4, 0.6]
-            });
-
-            sections.forEach((section) => observer.observe(section));
-
-            document.querySelectorAll('.nav-anchor').forEach((link) => {
-                link.addEventListener('click', () => {
-                    setActiveNav(link.dataset.target);
-                });
-            });
-
-            const initial = window.location.hash ? window.location.hash.slice(1) : 'overview';
-            setActiveNav(initial);
-        }
-
-        function getStateColor(status) {
-            if (status === 'online' || status === 'ready') return '#27d3a2';
-            if (status === 'warning' || status === 'standby') return '#f6c14b';
-            return '#ff6b6b';
-        }
-
-        function renderNetworkTargets(targets) {
-            const root = document.getElementById('networkGrid');
-            root.innerHTML = targets.map((target) => {
-                const color = getStateColor(target.status);
-                return `
-                    <article class="network-card">
-                        <div class="top">
-                            <div class="name">${target.label}</div>
-                            <div class="state" style="color:${color}">
-                                <span class="state-dot" style="color:${color};background:${color}"></span>
-                                <span>${String(target.status).toUpperCase()}</span>
-                            </div>
-                        </div>
-                        <div class="endpoint-text">${target.endpoint}</div>
-                        <div class="detail">
-                            Latency: ${target.latency || '-'}<br>
-                            Detail: ${target.detail || '-'}
-                        </div>
-                    </article>
-                `;
-            }).join('');
-        }
-
-        async function runRestartPool() {
-            const pool = document.getElementById('poolName').value;
-            const note = document.getElementById('restartNote').value;
-            setOutput('> recycle pool ' + pool + '\n> board command armed...');
-            try {
-                const result = await api('?api=restart_pool', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-                    body: new URLSearchParams({pool, note})
-                });
-                setOutput(formatObject(result));
-                refreshAll();
-            } catch (error) {
-                setOutput('ERROR: ' + error.message);
-            }
-        }
-
-        async function runRestartGroup() {
-            const group = document.getElementById('groupName').value;
-            const note = document.getElementById('restartNote').value;
-            setOutput('> run stack group ' + group + '\n> synchronizing board bus...');
-            try {
-                const result = await api('?api=restart_group', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-                    body: new URLSearchParams({group, note})
-                });
-                setOutput(formatObject(result));
-                refreshAll();
-            } catch (error) {
-                setOutput('ERROR: ' + error.message);
-            }
-        }
-
-        async function runRestartIis() {
-            const reason = document.getElementById('restartNote').value || 'Restart dari control board';
-            if (!confirm('Yakin ingin hard reset IIS?')) {
-                return;
-            }
-            setOutput('> hard reset iis\n> high priority command...');
-            try {
-                const result = await api('?api=restart_iis', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-                    body: new URLSearchParams({reason})
-                });
-                setOutput(formatObject(result));
-                refreshAll();
-            } catch (error) {
-                setOutput('ERROR: ' + error.message);
-            }
-        }
-
-        function quickRestart(pool) {
-            document.getElementById('poolName').value = pool;
-            runRestartPool();
-        }
-
-        function quickGroup(group) {
-            document.getElementById('groupName').value = group;
-            runRestartGroup();
-        }
-
-        async function sendTestTelegram() {
-            setOutput('> ping telegram link\n> tx line active...');
-            try {
-                const result = await api('?api=test_telegram');
-                setOutput(result.message);
-                refreshLogs();
-            } catch (error) {
-                setOutput('ERROR: ' + error.message);
-            }
-        }
-
-        async function pollTelegramSilently() {
-            if (!isServerMode()) {
-                document.getElementById('telegramPollState').textContent = 'USER MODE';
-                return;
-            }
-            try {
-                const result = await api('?api=telegram_poll');
-                document.getElementById('telegramPollState').textContent = result.count > 0 ? `RX ${result.count}` : 'LISTEN';
-                document.getElementById('telegramPollTime').textContent = result.updated_at || new Date().toISOString();
-                if (result.count > 0) {
-                    refreshLogs();
-                }
-            } catch (error) {
-                document.getElementById('telegramPollState').textContent = 'ERROR';
-            }
-        }
-
-        async function checkDisk(notify) {
-            document.getElementById('diskPanel').textContent = 'Scanning disk sensor...';
-            try {
-                const query = notify ? '?api=monitor_disk&notify=1' : '?api=disk';
-                const result = await api(query);
-                const disk = result.data;
-                const text = [
-                    'Drive: ' + disk.drive,
-                    'Free: ' + disk.free_human + ' (' + disk.free_percent + '%)',
-                    'Used: ' + disk.used_human + ' (' + disk.used_percent + '%)',
-                    'State: ' + disk.status.toUpperCase(),
-                    'Threshold: ' + disk.threshold_percent + '%'
-                ].join('\n');
-                document.getElementById('diskPanel').textContent = text;
-                document.getElementById('statDisk').textContent = disk.status.toUpperCase();
-                document.getElementById('statDiskDetail').textContent = disk.free_human + ' free dari ' + disk.total_human;
-                document.getElementById('diskHeadline').textContent = disk.free_human + ' / ' + disk.free_percent + '%';
-                if (notify) {
-                    setOutput('Disk report diperiksa dan dikirim ke Telegram.');
-                    refreshLogs();
-                }
-            } catch (error) {
-                document.getElementById('diskPanel').textContent = 'ERROR: ' + error.message;
-            }
-        }
-
-        async function scanNetwork(writeLog) {
-            try {
-                document.getElementById('netBusDetail').textContent = 'Scanning target jaringan...';
-                const result = await api(writeLog ? '?api=network&log=1' : '?api=network');
-                const network = result.data;
-                document.getElementById('networkState').textContent = String(network.overall).toUpperCase();
-                document.getElementById('networkHeadline').textContent = String(network.overall).toUpperCase();
-                document.getElementById('netBusTile').textContent = String(network.overall).toUpperCase();
-                document.getElementById('networkScanTime').textContent = network.updated_at || '-';
-                document.getElementById('netBusDetail').textContent = `${network.targets.filter(t => t.status === 'online').length}/${network.targets.length} target online`;
-                renderNetworkTargets(network.targets);
-                if (writeLog) {
-                    refreshLogs();
-                }
-            } catch (error) {
-                document.getElementById('netBusDetail').textContent = 'ERROR: ' + error.message;
-            }
-        }
-
-        async function findImages() {
-            const gate = document.getElementById('gateName').value;
-            const datetime = document.getElementById('photoTime').value;
-            const resultBox = document.getElementById('imageResult');
-            const gallery = document.getElementById('imageGallery');
-            resultBox.textContent = 'Reading backup image bus...';
-            gallery.innerHTML = '';
-            try {
-                const result = await api('?api=find_images', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-                    body: new URLSearchParams({gate, datetime})
-                });
-                resultBox.textContent = result.message + ' Folder: ' + result.searched_folder;
-                gallery.innerHTML = result.images.map((image) => `
-                    <article class="gallery-item">
-                        <a href="${image.url}" target="_blank" rel="noopener">
-                            <img src="${image.url}" alt="${image.name}">
-                        </a>
-                        <div class="gallery-meta">
-                            <strong>${image.name}</strong><br>
-                            <span>${image.mtime}</span>
-                        </div>
-                    </article>
-                `).join('');
-                refreshLogs();
-            } catch (error) {
-                resultBox.textContent = 'ERROR: ' + error.message;
-            }
-        }
-
-        function renderTicketRows(tickets) {
-            const root = document.getElementById('ticketTableBody');
-            document.getElementById('ticketOpenBadge').textContent = tickets.filter((ticket) => ticket.status === 'open').length;
-            document.getElementById('ticketCheckBadge').textContent = tickets.filter((ticket) => ticket.status === 'on_check').length;
-            root.innerHTML = tickets.map((ticket) => {
-                const actions = [];
-                if (IS_ADMIN && ticket.status === 'open') {
-                    actions.push(`<button class="btn-soft" onclick="markTicketOnCheck('${escapeHtml(ticket.ticket_id)}')">ON CHECK</button>`);
-                }
-                if (IS_ADMIN && ticket.status !== 'done') {
-                    actions.push(`<button class="btn-main" onclick="markTicketDone('${escapeHtml(ticket.ticket_id)}')">DONE</button>`);
-                }
-                return `
-                    <tr>
-                        <td>${escapeHtml(ticket.ticket_id)}</td>
-                        <td>${escapeHtml(ticket.issue_time)}</td>
-                        <td>${escapeHtml(ticket.site)}</td>
-                        <td>${escapeHtml(ticket.issue)}</td>
-                        <td>${escapeHtml(String(ticket.status || '-').toUpperCase())}</td>
-                        <td>${escapeHtml(ticket.repair_minutes === null ? '-' : `${ticket.repair_minutes} menit`)}</td>
-                        <td>${escapeHtml(ticket.note || '-')}</td>
-                        <td>${actions.join(' ') || '-'}</td>
-                    </tr>
-                `;
-            }).join('') || '<tr><td colspan="8">Belum ada tiket.</td></tr>';
-        }
-
-        async function loadTickets() {
-            try {
-                const result = await api('?api=tickets');
-                renderTicketRows(result.data);
-            } catch (error) {
-                setOutput('ERROR loadTickets: ' + error.message);
-            }
-        }
-
-        async function createTicket() {
-            const issue_time = document.getElementById('ticketIssueTime').value;
-            const site = IS_ADMIN ? document.getElementById('ticketSite').value : LOCKED_SITE;
-            const issue = document.getElementById('ticketIssue').value;
-            setOutput('> create ticket\n> writing ticket log...');
-            try {
-                const result = await api('?api=ticket_create', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-                    body: new URLSearchParams({issue_time, site, issue})
-                });
-                setOutput(result.message + ' ID: ' + result.ticket_id);
-                document.getElementById('ticketIssue').value = '';
-                loadTickets();
-                loadTicketReport();
-                refreshSummary();
-                refreshLogs();
-            } catch (error) {
-                setOutput('ERROR createTicket: ' + error.message);
-            }
-        }
-
-        async function markTicketOnCheck(ticketId) {
-            setOutput('> ticket ' + ticketId + '\n> set status on check...');
-            try {
-                const result = await api('?api=ticket_on_check', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-                    body: new URLSearchParams({ticket_id: ticketId})
-                });
-                setOutput(result.message);
-                loadTickets();
-                loadTicketReport();
-                refreshSummary();
-                refreshLogs();
-            } catch (error) {
-                setOutput('ERROR markTicketOnCheck: ' + error.message);
-            }
-        }
-
-        async function markTicketDone(ticketId) {
-            const note = prompt('Catatan penyelesaian tiket:', '');
-            if (note === null) {
-                return;
-            }
-            setOutput('> ticket ' + ticketId + '\n> set status done...');
-            try {
-                const result = await api('?api=ticket_done', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-                    body: new URLSearchParams({ticket_id: ticketId, note})
-                });
-                setOutput(result.message);
-                loadTickets();
-                loadTicketReport();
-                refreshSummary();
-                refreshLogs();
-            } catch (error) {
-                setOutput('ERROR markTicketDone: ' + error.message);
-            }
-        }
-
-        async function loadTicketReport() {
-            try {
-                const month = document.getElementById('reportMonth').value || new Date().toISOString().slice(0, 7);
-                const result = await api('?api=ticket_report&month=' + encodeURIComponent(month));
-                const root = document.getElementById('ticketReportBody');
-                root.innerHTML = result.data.map((item) => `
-                    <tr>
-                        <td>${escapeHtml(item.ticket_id)}</td>
-                        <td>${escapeHtml(item.site)}</td>
-                        <td>${escapeHtml(item.issue)}</td>
-                        <td>${escapeHtml(item.issue_time)}</td>
-                        <td>${escapeHtml(String(item.status || '-').toUpperCase())}</td>
-                        <td>${escapeHtml(item.repair_duration || '-')}</td>
-                        <td>${escapeHtml(item.note || '-')}</td>
-                    </tr>
-                `).join('') || '<tr><td colspan="7">Belum ada data untuk bulan ini.</td></tr>';
-            } catch (error) {
-                setOutput('ERROR loadTicketReport: ' + error.message);
-            }
-        }
-
-        async function loadUsers() {
-            if (!IS_ADMIN) return;
-            try {
-                const result = await api('?api=users');
-                const root = document.getElementById('userTableBody');
-                root.innerHTML = result.data.map((user) => `
-                    <tr onclick="fillUserForm('${escapeHtml(user.username)}','${escapeHtml(user.role)}','${escapeHtml(user.site)}','${user.active ? '1' : '0'}')" style="cursor:pointer;">
-                        <td>${escapeHtml(user.username)}</td>
-                        <td>${escapeHtml(String(user.role).toUpperCase())}</td>
-                        <td>${escapeHtml(user.site)}</td>
-                        <td>${user.active ? 'ACTIVE' : 'INACTIVE'}</td>
-                        <td>${escapeHtml(user.created_at || '-')}</td>
-                        <td>${escapeHtml(user.updated_at || '-')}</td>
-                    </tr>
-                `).join('') || '<tr><td colspan="6">Belum ada user.</td></tr>';
-            } catch (error) {
-                setOutput('ERROR loadUsers: ' + error.message);
-            }
-        }
-
-        function fillUserForm(username, role, site, active) {
-            if (!IS_ADMIN) return;
-            document.getElementById('userUsername').value = username;
-            document.getElementById('userRole').value = role;
-            document.getElementById('userSite').value = site;
-            document.getElementById('userActive').value = active;
-            document.getElementById('userPassword').value = '';
-        }
-
-        async function createUserAccount() {
-            const username = document.getElementById('userUsername').value;
-            const password = document.getElementById('userPassword').value;
-            const role = document.getElementById('userRole').value;
-            const site = document.getElementById('userSite').value;
-            try {
-                const result = await api('?api=user_create', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-                    body: new URLSearchParams({username, password, role, site})
-                });
-                setOutput(result.message);
-                loadUsers();
-                refreshLogs();
-            } catch (error) {
-                setOutput('ERROR createUserAccount: ' + error.message);
-            }
-        }
-
-        async function updateUserAccount() {
-            const username = document.getElementById('userUsername').value;
-            const password = document.getElementById('userPassword').value;
-            const role = document.getElementById('userRole').value;
-            const site = document.getElementById('userSite').value;
-            const active = document.getElementById('userActive').value;
-            try {
-                const result = await api('?api=user_update', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-                    body: new URLSearchParams({username, password, role, site, active})
-                });
-                setOutput(result.message);
-                loadUsers();
-                refreshLogs();
-            } catch (error) {
-                setOutput('ERROR updateUserAccount: ' + error.message);
-            }
-        }
-
-        async function deleteUserAccount() {
-            const username = document.getElementById('userUsername').value;
-            if (!username || !confirm('Hapus user ' + username + '?')) {
-                return;
-            }
-            try {
-                const result = await api('?api=user_delete', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-                    body: new URLSearchParams({username})
-                });
-                setOutput(result.message);
-                loadUsers();
-                refreshLogs();
-            } catch (error) {
-                setOutput('ERROR deleteUserAccount: ' + error.message);
-            }
-        }
-
-        async function refreshLogs() {
-            try {
-                const [activity, telegram, network] = await Promise.all([
-                    api('?api=logs&type=app'),
-                    api('?api=logs&type=telegram'),
-                    api('?api=logs&type=network')
-                ]);
-                document.getElementById('activityLog').textContent = activity.logs.join('\n');
-                document.getElementById('telegramLog').textContent = telegram.logs.join('\n');
-                document.getElementById('networkLog').textContent = network.logs.join('\n');
-            } catch (error) {
-                setOutput('ERROR: ' + error.message);
-            }
-        }
-
-        async function refreshSummary() {
-            try {
-                const result = await api('?api=summary');
-                document.getElementById('serverTime').textContent = result.data.server_time;
-                document.getElementById('busState').textContent = result.data.board.bus_state;
-                document.getElementById('busStateBar').textContent = result.data.board.bus_state;
-                document.getElementById('controllerState').textContent = result.data.controller.armed ? 'ARMED' : 'DISARMED';
-                document.getElementById('controllerLast').textContent = result.data.controller.last_command;
-                document.getElementById('moduleCount').textContent = result.data.board.module_count;
-                document.getElementById('networkState').textContent = String(result.data.network.overall || 'standby').toUpperCase();
-                document.getElementById('networkHeadline').textContent = String(result.data.network.overall || 'standby').toUpperCase();
-                document.getElementById('networkScanTime').textContent = result.data.network.updated_at || '-';
-                document.getElementById('runtimeLabel').textContent = result.data.runtime.label || '-';
-                document.getElementById('runtimeIp').textContent = result.data.runtime.ip || '-';
-                document.getElementById('runtimeHost').textContent = `${result.data.runtime.label || '-'} / ${result.data.runtime.ip || '-'}`;
-                document.getElementById('authRole').textContent = String(result.data.auth.role || '-').toUpperCase();
-                document.getElementById('authSite').textContent = result.data.auth.site || '-';
-                document.getElementById('ticketOpenCount').textContent = result.data.tickets.open || 0;
-                document.getElementById('ticketOnCheckCount').textContent = result.data.tickets.on_check || 0;
-                renderModules(result.data.modules);
-            } catch (error) {
-            }
-        }
-
-        function refreshAll() {
-            refreshLogs();
-            checkDisk(false);
-            scanNetwork(false);
-            refreshSummary();
-            loadTickets();
-            loadTicketReport();
-            loadUsers();
-        }
-
-        const DASHBOARD_MODE_KEY = 'eos_tools_dashboard_mode';
-        const USER_IDLE_TIMEOUT_MS = 15 * 60 * 1000;
-        let currentDashboardMode = 'user';
-        let telegramPollIntervalId = null;
-        let userLogoutTimerId = null;
-
-        function isServerMode() {
-            return currentDashboardMode === 'server';
-        }
-
-        function loadDashboardMode() {
-            const savedMode = window.localStorage.getItem(DASHBOARD_MODE_KEY);
-            return savedMode === 'server' ? 'server' : 'user';
-        }
-
-        function setDashboardMode(mode) {
-            currentDashboardMode = mode === 'server' ? 'server' : 'user';
-            window.localStorage.setItem(DASHBOARD_MODE_KEY, currentDashboardMode);
-            updateDashboardModeUI();
-            configureTelegramPolling();
-            configureAutoLogout();
-            setOutput(
-                currentDashboardMode === 'server'
-                    ? 'Mode SERVER aktif. Poll Telegram per 1 menit berjalan terus dan auto logout dimatikan.'
-                    : 'Mode USER aktif. Poll Telegram per 1 menit dimatikan dan auto logout idle diaktifkan.'
-            );
-        }
-
-        function updateDashboardModeUI() {
-            const isServer = isServerMode();
-            document.getElementById('dashboardModeLabel').textContent = isServer ? 'SERVER' : 'USER';
-            document.getElementById('autoPollLabel').textContent = isServer ? 'ON' : 'OFF';
-            document.getElementById('autoLogoutLabel').textContent = isServer ? 'OFF' : 'ON';
-            document.getElementById('dashboardModeHint').textContent = isServer
-                ? 'Mode server: polling Telegram per 1 menit tetap aktif agar kiriman dan respons bot terus diproses.'
-                : 'Mode user: polling Telegram per 1 menit dimatikan agar browser operator tidak ikut memproses kiriman bot.';
-            document.getElementById('modeUserBtn').classList.toggle('active', !isServer);
-            document.getElementById('modeServerBtn').classList.toggle('active', isServer);
-            if (!isServer) {
-                document.getElementById('telegramPollState').textContent = 'USER MODE';
-            }
-        }
-
-        function configureTelegramPolling() {
-            if (telegramPollIntervalId) {
-                clearInterval(telegramPollIntervalId);
-                telegramPollIntervalId = null;
-            }
-            if (isServerMode()) {
-                pollTelegramSilently();
-                telegramPollIntervalId = setInterval(pollTelegramSilently, 60000);
-            } else {
-                document.getElementById('telegramPollState').textContent = 'USER MODE';
-            }
-        }
-
-        function performAutoLogout() {
-            setOutput('Idle timeout tercapai. Dashboard logout otomatis karena mode USER aktif.');
-            window.location.href = '?logout=1';
-        }
-
-        function resetUserLogoutTimer() {
-            if (isServerMode()) {
-                return;
-            }
-            if (userLogoutTimerId) {
-                clearTimeout(userLogoutTimerId);
-            }
-            userLogoutTimerId = setTimeout(performAutoLogout, USER_IDLE_TIMEOUT_MS);
-        }
-
-        function configureAutoLogout() {
-            if (userLogoutTimerId) {
-                clearTimeout(userLogoutTimerId);
-                userLogoutTimerId = null;
-            }
-            if (!isServerMode()) {
-                resetUserLogoutTimer();
-            }
-        }
-
-        function bindUserActivityListeners() {
-            ['click', 'keydown', 'mousemove', 'scroll', 'touchstart'].forEach((eventName) => {
-                window.addEventListener(eventName, resetUserLogoutTimer, {passive: true});
-            });
-        }
-
-        checkDisk(false);
-        scanNetwork(false);
-        loadTickets();
-        loadTicketReport();
-        loadUsers();
-        setupSectionNavigation();
-        currentDashboardMode = loadDashboardMode();
-        updateDashboardModeUI();
-        configureTelegramPolling();
-        configureAutoLogout();
-        bindUserActivityListeners();
-        setInterval(refreshSummary, 1000);
-        setInterval(refreshLogs, 10000);
-        setInterval(() => checkDisk(false), 30000);
-        setInterval(() => scanNetwork(false), 30000);
+        window.EOS_DASHBOARD = <?= json_encode([
+            'isAdmin' => (bool) $isAdmin,
+            'lockedSite' => $lockedSite,
+            'requestLimits' => [
+                'tickets' => 20,
+                'users' => 300,
+                'logs' => 60,
+                'networkTargets' => 40,
+            ],
+            'modeKey' => 'eos_tools_dashboard_mode',
+            'autoLogoutMs' => 15 * 60 * 1000,
+            'refresh' => [
+                'user' => ['summary' => 3000, 'logs' => 10000, 'disk' => 30000, 'network' => 30000],
+                'server' => ['summary' => 5000, 'logs' => 0, 'disk' => 0, 'network' => 0],
+            ],
+            'text' => [
+                'modeServer' => 'Mode SERVER aktif. Fokus statistik, auto ping Telegram tetap jalan untuk warning.',
+                'modeUser' => 'Mode USER aktif. UI operasional full: log, ticket, scan dan user management aktif.',
+            ],
+            'apiPath' => [
+                'summary' => '?api=summary',
+                'logs' => '?api=logs',
+                'tickets' => '?api=tickets',
+                'users' => '?api=users',
+                'monitor_disk' => '?api=monitor_disk',
+                'network' => '?api=network',
+                'disk' => '?api=disk',
+                'ticket_create' => '?api=ticket_create',
+                'ticket_on_check' => '?api=ticket_on_check',
+                'ticket_done' => '?api=ticket_done',
+                'ticket_report' => '?api=ticket_report',
+                'user_create' => '?api=user_create',
+                'user_update' => '?api=user_update',
+                'user_delete' => '?api=user_delete',
+                'restart_pool' => '?api=restart_pool',
+                'restart_group' => '?api=restart_group',
+                'restart_iis' => '?api=restart_iis',
+                'test_telegram' => '?api=test_telegram',
+                'telegram_poll' => '?api=telegram_poll',
+                'find_images' => '?api=find_images',
+            ],
+        ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT); ?>;
     </script>
-</body>
+    <script src="assets/dashboard-api.js"></script>
+    <script src="assets/dashboard-actions.js"></script>
+    <script src="assets/dashboard-state.js"></script>
+    </body>
 </html>

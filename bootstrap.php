@@ -723,6 +723,15 @@ function eos_ticket_records(): array
     return array_values($index['tickets'] ?? []);
 }
 
+function eos_limit_rows(array $items, ?int $limit = null): array
+{
+    if ($limit === null || $limit <= 0) {
+        return array_values($items);
+    }
+
+    return array_slice(array_values($items), 0, $limit);
+}
+
 function eos_ticket_repair_minutes(array $ticket): ?int
 {
     $start = (string) ($ticket['checked_at'] ?: $ticket['created_at'] ?? '');
@@ -754,17 +763,30 @@ function eos_ticket_duration_label(?int $minutes): string
     return $hours . ' jam' . ($rest > 0 ? ' ' . $rest . ' menit' : '');
 }
 
-function eos_visible_tickets(): array
+function eos_visible_tickets(?int $limit = null): array
 {
     $tickets = eos_ticket_records();
     if (eos_is_admin()) {
-        return $tickets;
+        return eos_limit_rows($tickets, $limit);
     }
 
     $site = strtoupper((string) eos_current_user_site());
-    return array_values(array_filter($tickets, static function ($ticket) use ($site) {
-        return strtoupper((string) ($ticket['site'] ?? '')) === $site;
-    }));
+    if ($site === '') {
+        return [];
+    }
+
+    $filtered = [];
+    foreach ($tickets as $ticket) {
+        if (strtoupper((string) ($ticket['site'] ?? '')) !== $site) {
+            continue;
+        }
+        $filtered[] = $ticket;
+        if ($limit !== null && $limit > 0 && count($filtered) >= $limit) {
+            break;
+        }
+    }
+
+    return $filtered;
 }
 
 function eos_find_ticket(string $ticketId): ?array
@@ -1155,12 +1177,15 @@ function eos_telegram_ticket_row(array $ticket): string
     return $ticket['ticket_id'] . ' | ' . $ticket['site'] . ' | ' . strtoupper((string) ($ticket['status'] ?? '-')) . ' | ' . ($ticket['issue'] ?? '-');
 }
 
-function eos_visible_active_tickets(): array
+function eos_visible_active_tickets(?int $limit = null): array
 {
-    return array_values(array_filter(eos_visible_tickets(), static function ($ticket) {
+    $tickets = eos_visible_tickets($limit);
+    $tickets = array_values(array_filter($tickets, static function ($ticket) {
         $status = strtolower((string) ($ticket['status'] ?? ''));
         return $status === 'open' || $status === 'on_check';
-    }));
+    });
+
+    return eos_limit_rows($tickets, $limit);
 }
 
 function eos_telegram_visible_tickets_text(array $tickets, int $limit = 6): string
@@ -1182,7 +1207,45 @@ function eos_tail(string $file, int $limit = 80): array
         return [];
     }
 
-    $lines = file($file, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [];
+    if ($limit <= 0) {
+        return [];
+    }
+
+    $limit = min($limit, 300);
+    $handle = fopen($file, 'rb');
+    if (!$handle) {
+        return [];
+    }
+
+    $chunkSize = 8192;
+    $position = -1;
+    $buffer = '';
+    $lineCount = 0;
+
+    while (true) {
+        if (fseek($handle, $position * $chunkSize, SEEK_END) !== 0) {
+            fseek($handle, 0, SEEK_SET);
+            $buffer = fread($handle, $chunkSize) . $buffer;
+            break;
+        }
+
+        $buffer = fread($handle, $chunkSize) . $buffer;
+        $lineCount = substr_count($buffer, "\n");
+        if (ftell($handle) === 0 || $lineCount >= $limit) {
+            break;
+        }
+
+        $position++;
+    }
+
+    fclose($handle);
+
+    $trimmed = rtrim($buffer);
+    if ($trimmed === '') {
+        return [];
+    }
+
+    $lines = preg_split('/\R/', $trimmed) ?: [];
     return array_reverse(array_slice($lines, -1 * $limit));
 }
 
@@ -1644,7 +1707,7 @@ function eos_telegram_target_status_snippet(array $target): string
 
 function eos_telegram_overall_status_reply(string $name): string
 {
-    $summary = eos_dashboard_summary();
+    $summary = eos_dashboard_summary('server');
     $network = $summary['network'] ?? ['targets' => [], 'overall' => 'standby'];
     $targets = $network['targets'] ?? [];
     $online = count(array_filter($targets, static fn($target) => ($target['status'] ?? '') === 'online'));
@@ -2212,6 +2275,16 @@ function eos_network_targets_by_key(array $networkState): array
     return $map;
 }
 
+function eos_network_device_key_camera(array $camera): string
+{
+    return 'camera_' . strtolower((string) $camera['gate_id']) . '_' . preg_replace('/[^0-9]/', '_', (string) $camera['ip']) . '_' . strtolower((string) $camera['name']);
+}
+
+function eos_network_device_status(array $networkMap, string $key): array
+{
+    return $networkMap[$key] ?? [];
+}
+
 function eos_find_backup_images(string $gate, string $dateTimeInput): array
 {
     $gate = strtoupper(trim($gate));
@@ -2311,32 +2384,46 @@ function eos_format_plain(string $value): string
     return str_replace(['<', '>'], ['&lt;', '&gt;'], trim($value));
 }
 
-function eos_dashboard_summary(): array
+function eos_dashboard_summary(?string $scope = null): array
 {
+    $scope = strtolower(trim((string) $scope));
+    $isServerScope = $scope === 'server';
     $disk = eos_disk_space_report();
     $network = eos_network_cached_state();
-    $modules = eos_controller_modules($disk, $network);
+    $tickets = eos_visible_tickets();
+    $openTickets = array_filter($tickets, static fn($ticket) => ($ticket['status'] ?? '') === 'open');
+    $onCheckTickets = array_filter($tickets, static fn($ticket) => ($ticket['status'] ?? '') === 'on_check');
+    $ticketCounts = [
+        'open' => count($openTickets),
+        'on_check' => count($onCheckTickets),
+    ];
+
+    $modules = eos_controller_modules($disk, $network, $ticketCounts);
     $controller = eos_controller_state();
     $runtime = eos_runtime_identity();
-    $networkMap = eos_network_targets_by_key($network);
-    $cameras = array_map(static function ($camera) use ($networkMap) {
-        $key = 'camera_' . strtolower((string) $camera['gate_id']) . '_' . preg_replace('/[^0-9]/', '_', (string) $camera['ip']) . '_' . strtolower((string) $camera['name']);
-        $camera['status'] = $networkMap[$key]['status'] ?? 'unknown';
-        $camera['latency'] = $networkMap[$key]['latency'] ?? null;
-        return $camera;
-    }, (array) eos_config('devices.cameras', []));
-    $gates = array_map(static function ($gate) use ($networkMap) {
-        $barrierKey = 'barrier_' . strtolower((string) $gate['id']);
-        $timbanganKey = 'timbangan_' . strtolower((string) $gate['id']);
-        $gate['barrier_status'] = $networkMap[$barrierKey]['status'] ?? 'unknown';
-        $gate['barrier_latency'] = $networkMap[$barrierKey]['latency'] ?? null;
-        $gate['timbangan_status'] = $networkMap[$timbanganKey]['status'] ?? 'unknown';
-        $gate['timbangan_latency'] = $networkMap[$timbanganKey]['latency'] ?? null;
-        return $gate;
-    }, (array) eos_config('devices.gates', []));
-    $visibleTickets = eos_visible_tickets();
-    $openTickets = count(array_filter($visibleTickets, static fn($ticket) => ($ticket['status'] ?? '') === 'open'));
-    $onCheckTickets = count(array_filter($visibleTickets, static fn($ticket) => ($ticket['status'] ?? '') === 'on_check'));
+    $networkMap = [];
+    if (!$isServerScope) {
+        $networkMap = eos_network_targets_by_key($network);
+    }
+    $cameras = $isServerScope
+        ? []
+        : array_map(static function ($camera) use ($networkMap) {
+            $network = eos_network_device_status($networkMap, eos_network_device_key_camera($camera));
+            $camera['status'] = $network['status'] ?? 'unknown';
+            $camera['latency'] = $network['latency'] ?? null;
+            return $camera;
+        }, (array) eos_config('devices.cameras', []));
+    $gates = $isServerScope
+        ? []
+        : array_map(static function ($gate) use ($networkMap) {
+            $barrierKey = 'barrier_' . strtolower((string) $gate['id']);
+            $timbanganKey = 'timbangan_' . strtolower((string) $gate['id']);
+            $gate['barrier_status'] = $networkMap[$barrierKey]['status'] ?? 'unknown';
+            $gate['barrier_latency'] = $networkMap[$barrierKey]['latency'] ?? null;
+            $gate['timbangan_status'] = $networkMap[$timbanganKey]['status'] ?? 'unknown';
+            $gate['timbangan_latency'] = $networkMap[$timbanganKey]['latency'] ?? null;
+            return $gate;
+        }, (array) eos_config('devices.gates', []));
     return [
         'app_name' => eos_config('app_name'),
         'board_name' => 'EOS CONTROL BOARD',
@@ -2346,9 +2433,9 @@ function eos_dashboard_summary(): array
         'runtime' => $runtime,
         'disk' => $disk,
         'network' => $network,
-        'pools' => eos_config('iis.app_pools', []),
-        'groups' => array_keys(eos_config('iis.restart_groups', [])),
-        'gates' => eos_config('images.gates', []),
+        'pools' => $isServerScope ? [] : eos_config('iis.app_pools', []),
+        'groups' => $isServerScope ? [] : array_keys(eos_config('iis.restart_groups', [])),
+        'gates' => $isServerScope ? [] : eos_config('images.gates', []),
         'devices' => [
             'cameras' => $cameras,
             'gates' => $gates,
@@ -2361,25 +2448,25 @@ function eos_dashboard_summary(): array
             'sites' => eos_ticket_sites(),
         ],
         'tickets' => [
-            'open' => $openTickets,
-            'on_check' => $onCheckTickets,
-            'recent' => array_slice($visibleTickets, 0, 8),
+            'open' => $ticketCounts['open'],
+            'on_check' => $ticketCounts['on_check'],
+            'recent' => $isServerScope ? [] : array_slice($tickets, 0, 8),
         ],
         'modules' => $modules,
         'controller' => $controller,
         'board' => [
             'firmware' => 'EOS-FW 1.0',
-            'uptime_hint' => 'Polling 1s / logs 10s / disk 30s',
+            'uptime_hint' => $isServerScope ? 'Polling 5s / no auto logs' : 'Polling 3s / logs 10s / disk 30s',
             'bus_state' => eos_controller_bus_state($modules),
             'module_count' => count($modules),
         ],
-        'activity_logs' => eos_tail(eos_config('paths.app_log'), 12),
-        'telegram_logs' => eos_tail(eos_config('paths.telegram_log'), 12),
-        'network_logs' => eos_tail(eos_config('paths.network_log'), 12),
+        'activity_logs' => $isServerScope ? [] : eos_tail(eos_config('paths.app_log'), 12),
+        'telegram_logs' => $isServerScope ? [] : eos_tail(eos_config('paths.telegram_log'), 12),
+        'network_logs' => $isServerScope ? [] : eos_tail(eos_config('paths.network_log'), 12),
     ];
 }
 
-function eos_controller_modules(?array $disk = null, ?array $network = null): array
+function eos_controller_modules(?array $disk = null, ?array $network = null, ?array $ticketCounts = null): array
 {
     $disk = $disk ?: eos_disk_space_report();
     $network = $network ?: eos_network_cached_state();
@@ -2394,9 +2481,8 @@ function eos_controller_modules(?array $disk = null, ?array $network = null): ar
             $networkOnline++;
         }
     }
-    $tickets = eos_visible_tickets();
-    $ticketOpen = count(array_filter($tickets, static fn($ticket) => ($ticket['status'] ?? '') === 'open'));
-    $ticketCheck = count(array_filter($tickets, static fn($ticket) => ($ticket['status'] ?? '') === 'on_check'));
+    $ticketOpen = (int) (($ticketCounts['open'] ?? null) ?? 0);
+    $ticketCheck = (int) (($ticketCounts['on_check'] ?? null) ?? 0);
 
     return [
         [
@@ -2686,7 +2772,7 @@ function eos_telegram_process_update_as_actor(string $text, string $lower, strin
         $ticketSummaryIntent = eos_telegram_natural_ticket_summary_intent($lower);
         if ($ticketSummaryIntent !== null) {
             if (($ticketSummaryIntent['type'] ?? '') === 'active') {
-                $activeTickets = eos_visible_active_tickets();
+                $activeTickets = eos_visible_active_tickets(12);
                 $messageText = "🎫 <b>Tiket Aktif</b>\n" . eos_format_plain(eos_telegram_visible_tickets_text($activeTickets, 10));
             } elseif (($ticketSummaryIntent['type'] ?? '') === 'month') {
                 $monthValue = (string) $ticketSummaryIntent['value'];
@@ -2744,7 +2830,7 @@ function eos_telegram_process_update_as_actor(string $text, string $lower, strin
     }
 
     if ($lower === '/tickets' || $lower === '/ticket-list') {
-        $tickets = eos_visible_tickets();
+        $tickets = eos_visible_tickets(12);
         eos_send_telegram(
             eos_telegram_with_identity("🎫 <b>Ticket Board</b>\n" . eos_format_plain(eos_telegram_visible_tickets_text($tickets))),
             [$chatId],
@@ -2820,7 +2906,7 @@ function eos_telegram_process_update_as_actor(string $text, string $lower, strin
     }
 
     if ($lower === '/health') {
-        $summary = eos_dashboard_summary();
+        $summary = eos_dashboard_summary('server');
         $disk = $summary['disk'];
         eos_send_telegram(
             eos_telegram_with_identity("🩺 <b>EOS Tools Health</b>\nTime: {$summary['server_time']}\nDisk C Free: {$disk['free_human']} ({$disk['free_percent']}%)\nJumlah Pool: " . count($summary['pools'])),
@@ -2887,7 +2973,7 @@ function eos_telegram_poll_once(): array
     $state = is_file($stateFile) ? (json_decode((string) file_get_contents($stateFile), true) ?: []) : [];
     $offset = (int) ($state['offset'] ?? 0);
 
-    $query = 'https://api.telegram.org/bot' . $token . '/getUpdates?timeout=1&offset=' . $offset;
+    $query = 'https://api.telegram.org/bot' . $token . '/getUpdates?timeout=1&offset=' . $offset . '&limit=25';
     $raw = @file_get_contents($query);
     $json = json_decode((string) $raw, true);
 
